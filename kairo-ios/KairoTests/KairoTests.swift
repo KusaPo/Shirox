@@ -113,6 +113,58 @@ final class KairoTests: XCTestCase {
         item.relativePath = "Library/Application Support/Kairo/a.mp4"
         XCTAssertNotNil(item.localURL)
     }
+    func testDownloadLocationRecognizesAliasesOfTheSameContainer() throws {
+        let fm = FileManager.default
+        let fixture = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: fixture) }
+        let container = fixture.appendingPathComponent("container")
+        let alias = fixture.appendingPathComponent("alias")
+        let path = "Library/Episode 1 日本.movpkg"
+        let package = container.appendingPathComponent(path)
+        try fm.createDirectory(at: package, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: container)
+        let aliasPackage = alias.appendingPathComponent(path)
+        // Reproduce the old text-prefix failure with two real paths to one folder.
+        XCTAssertFalse(aliasPackage.path.hasPrefix(container.path + "/"))
+        XCTAssertEqual(LocalDownloadStorage.relativePath(for: aliasPackage, within: container), path)
+        XCTAssertEqual(LocalDownloadStorage.relativePath(for: package, within: alias), path)
+        let restored = try XCTUnwrap(LocalDownloadStorage.url(forRelativePath: path, within: alias))
+        XCTAssertTrue(fm.fileExists(atPath: restored.path))
+        XCTAssertEqual(restored.path, package.resolvingSymlinksInPath().standardizedFileURL.path)
+    }
+    func testDownloadStorageRejectsSiblingFoldersAndEscapingSymlinks() throws {
+        let fm = FileManager.default
+        let fixture = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: fixture) }
+        let container = fixture.appendingPathComponent("container")
+        let sibling = fixture.appendingPathComponent("container-other")
+        try fm.createDirectory(at: container, withIntermediateDirectories: true)
+        try fm.createDirectory(at: sibling, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: container.appendingPathComponent("escape"), withDestinationURL: sibling)
+        XCTAssertNil(LocalDownloadStorage.relativePath(for: sibling, within: container))
+        XCTAssertNil(LocalDownloadStorage.relativePath(for: container, within: container))
+        XCTAssertNil(LocalDownloadStorage.relativePath(for: URL(string: "https://example.com/a.movpkg")!, within: container))
+        XCTAssertNil(LocalDownloadStorage.url(forRelativePath: "escape/a.movpkg", within: container))
+        XCTAssertNil(LocalDownloadStorage.url(forRelativePath: "", within: container))
+        XCTAssertNil(LocalDownloadStorage.url(forRelativePath: ".", within: container))
+    }
+    func testStoredDownloadPathSurvivesContainerRelocation() throws {
+        let fm = FileManager.default
+        let fixture = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: fixture) }
+        let old = fixture.appendingPathComponent("old")
+        let new = fixture.appendingPathComponent("new")
+        let package = old.appendingPathComponent("Library/episode.movpkg")
+        try fm.createDirectory(at: package, withIntermediateDirectories: true)
+        let path = try XCTUnwrap(LocalDownloadStorage.relativePath(for: package, within: old))
+        var record = DownloadRecord(anime: Anime(title: "Saved"), episode: 1, audio: .sub)
+        record.relativePath = path
+        let saved = try JSONEncoder().encode(record)
+        try fm.moveItem(at: old, to: new)
+        let decoded = try JSONDecoder().decode(DownloadRecord.self, from: saved)
+        let restored = try XCTUnwrap(LocalDownloadStorage.url(forRelativePath: try XCTUnwrap(decoded.relativePath), within: new))
+        XCTAssertTrue(fm.fileExists(atPath: restored.path))
+    }
     func testRejectsEmbeddedCredentialsAndLocalLiteralAddresses() {
         XCTAssertNil(WebAddress.media("https://user:password@example.com/a.mp4"))
         XCTAssertNil(WebAddress.media("https://127.0.0.1/a.mp4"))

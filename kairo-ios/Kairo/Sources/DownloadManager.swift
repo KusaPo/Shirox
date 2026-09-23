@@ -240,9 +240,13 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
         } catch { transferErrors[id] = error.localizedDescription }
     }
     private func remember(_ url: URL, id: UUID) {
-        let prefix = NSHomeDirectory() + "/"
-        guard url.path.hasPrefix(prefix) else { transferErrors[id] = "The download is outside this app's storage."; return }
-        store.updateDownload(id) { $0.relativePath = String(url.path.dropFirst(prefix.count)) }
+        guard let relativePath = LocalDownloadStorage.relativePath(for: url) else {
+            // Include the actual local destination so an unexpected system location
+            // can be diagnosed instead of incorrectly describing where the file is.
+            transferErrors[id] = "Kairo couldn't recognize the saved download location: \(url.path)"
+            return
+        }
+        store.updateDownload(id) { $0.relativePath = relativePath }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let id = id(task) else { return }

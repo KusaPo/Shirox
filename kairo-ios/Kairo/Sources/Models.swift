@@ -59,8 +59,30 @@ struct DownloadRecord: Codable, Identifiable {
     var message: String?
     var created = Date()
     var localURL: URL? {
-        guard let relativePath, !relativePath.hasPrefix("/"), !relativePath.split(separator: "/").contains("..") else { return nil }
-        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(relativePath)
+        guard let relativePath else { return nil }
+        return LocalDownloadStorage.url(forRelativePath: relativePath)
+    }
+}
+
+enum LocalDownloadStorage {
+    static var root: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
+
+    // iOS can return /private/var/... while the app's home uses /var/....
+    // Resolve both URLs before comparing components; never move an HLS package.
+    static func relativePath(for location: URL, within root: URL = LocalDownloadStorage.root) -> String? {
+        guard location.isFileURL, root.isFileURL else { return nil }
+        let base = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let target = location.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard target.count > base.count, target.starts(with: base) else { return nil }
+        return target.dropFirst(base.count).joined(separator: "/")
+    }
+
+    static func url(forRelativePath path: String, within root: URL = LocalDownloadStorage.root) -> URL? {
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\0"),
+              !path.split(separator: "/").contains("..") else { return nil }
+        let location = root.appendingPathComponent(path)
+        guard relativePath(for: location, within: root) != nil else { return nil }
+        return location.resolvingSymlinksInPath().standardizedFileURL
     }
 }
 
