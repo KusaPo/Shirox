@@ -76,9 +76,15 @@ final class PlaybackController: ObservableObject {
             try Task.checkCancellation()
             active = request
             let item = AVPlayerItem(asset: asset)
+            player.appliesMediaSelectionCriteriaAutomatically = false
             if let audio = request.audio,
                let group = try? await asset.loadMediaSelectionGroup(for: .audible),
                let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: audio.languageCode)).first {
+                item.select(option, in: group)
+            }
+            if request.audio == .sub,
+               let group = try? await asset.loadMediaSelectionGroup(for: .legible),
+               let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first {
                 item.select(option, in: group)
             }
             try Task.checkCancellation()
