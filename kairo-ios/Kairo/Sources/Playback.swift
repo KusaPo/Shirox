@@ -146,14 +146,30 @@ final class PlaybackController: ObservableObject {
 
 struct NativePlayer: UIViewControllerRepresentable {
     let player: AVPlayer
+    let onTap: () -> Void
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onTap: () -> Void
+        init(onTap: @escaping () -> Void) { self.onTap = onTap }
+        @objc func didTap() { onTap() }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let view = AVPlayerViewController()
         view.player = player
         view.allowsPictureInPicturePlayback = true
         view.canStartPictureInPictureAutomaticallyFromInline = true
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTap))
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        view.view.addGestureRecognizer(tap)
         return view
     }
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) { uiViewController.player = player }
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        uiViewController.player = player
+        context.coordinator.onTap = onTap
+    }
 }
 
 struct PlayerScreen: View {
@@ -164,12 +180,15 @@ struct PlayerScreen: View {
     @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
     @AppStorage("playerAutoSkipIntro") private var autoSkipIntro = false
     @State private var currentRequest: PlaybackRequest?
+    @State private var controlsVisible = true
+    @State private var hideControlsTask: Task<Void, Never>?
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            NativePlayer(player: controller.player).ignoresSafeArea()
+            NativePlayer(player: controller.player, onTap: toggleControls).ignoresSafeArea()
             if controller.isPreparing {
                 Color.black.ignoresSafeArea()
+                    .onTapGesture(perform: toggleControls)
                 ProgressView("Preparing episode…").tint(.white).foregroundStyle(.white)
             }
             if let prompt = controller.skipPrompt, !controller.isPreparing {
@@ -184,7 +203,8 @@ struct PlayerScreen: View {
             }
         }
         .overlay(alignment: .top) {
-            HStack {
+            if controlsVisible {
+                HStack {
                 Button { dismiss() } label: {
                     Image(systemName: "xmark").font(.subheadline.bold())
                         .frame(width: 38, height: 38)
@@ -199,13 +219,20 @@ struct PlayerScreen: View {
                         .frame(width: 38, height: 38)
                         .background(.black.opacity(0.65), in: Circle())
                 }.accessibilityLabel("Playback settings")
+                }
+                .foregroundStyle(.white)
+                .padding()
+                .transition(.opacity)
             }
-            .foregroundStyle(.white)
-            .padding()
         }
+        .animation(.easeInOut(duration: 0.2), value: controlsVisible)
         .task { currentRequest = request; controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
+        .onChange(of: controller.isPreparing) { _, preparing in
+            if preparing { hideControlsTask?.cancel(); controlsVisible = true }
+            else { scheduleHideControls() }
+        }
         .onChange(of: autoSkipIntro) { _, enabled in controller.autoSkip = enabled }
-        .onDisappear { controller.stop() }
+        .onDisappear { hideControlsTask?.cancel(); controller.stop() }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
             guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
             controller.saveProgress(finished: true)
@@ -213,6 +240,18 @@ struct PlayerScreen: View {
                 Task { await controller.playNext(after: currentRequest, store: store) }
                 self.currentRequest = PlaybackRequest(anime: currentRequest.anime, episode: currentRequest.episode + 1, stream: nil)
             }
+        }
+    }
+    private func toggleControls() {
+        hideControlsTask?.cancel()
+        controlsVisible.toggle()
+        if controlsVisible && !controller.isPreparing { scheduleHideControls() }
+    }
+    private func scheduleHideControls() {
+        hideControlsTask?.cancel()
+        hideControlsTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if !Task.isCancelled { controlsVisible = false }
         }
     }
 }
