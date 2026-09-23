@@ -1,0 +1,239 @@
+import Foundation
+import AVFoundation
+import Combine
+
+// Delegate queues are main queues; published state is mutated on the main thread.
+final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate, URLSessionDownloadDelegate {
+    private let store: AppStore
+    private var sessions: [String: URLSession] = [:]
+    private var tasks: [UUID: URLSessionTask] = [:]
+    private var preparing: [UUID: Task<Void, Never>] = [:]
+    private var transferErrors: [UUID: String] = [:]
+    private var restoring = true
+    static let prefix = "net.kusapo.kairo.download."
+    private static var backgroundCompletions: [String: () -> Void] = [:]
+    private static var finishedSessions = Set<String>()
+    private static var validations: [String: Int] = [:]
+
+    static func registerCompletion(_ identifier: String, handler: @escaping () -> Void) {
+        backgroundCompletions[identifier] = handler
+        finishIfReady(identifier)
+    }
+    private static func finishIfReady(_ identifier: String) {
+        guard finishedSessions.contains(identifier), validations[identifier, default: 0] == 0,
+              let completion = backgroundCompletions.removeValue(forKey: identifier) else { return }
+        finishedSessions.remove(identifier)
+        completion()
+    }
+
+    init(store: AppStore) {
+        self.store = store
+        super.init()
+        for kind in ["hls", "file"] {
+            for network in ["wifi", "any"] {
+                let key = kind + "." + network
+                let config = URLSessionConfiguration.background(withIdentifier: Self.prefix + key)
+                config.allowsCellularAccess = network == "any"
+                config.waitsForConnectivity = true
+                config.isDiscretionary = false
+                config.sessionSendsLaunchEvents = true
+                let session: URLSession = kind == "hls"
+                    ? AVAssetDownloadURLSession(configuration: config, assetDownloadDelegate: self, delegateQueue: .main)
+                    : URLSession(configuration: config, delegate: self, delegateQueue: .main)
+                sessions[key] = session
+            }
+        }
+        restore()
+    }
+
+    private func restore() {
+        let oldIDs = Set(store.state.downloads.filter { $0.state != .ready }.map(\.id))
+        var remaining = sessions.count
+        for session in sessions.values {
+            session.getAllTasks { [weak self] restored in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    for task in restored {
+                        guard let text = task.taskDescription, let id = UUID(uuidString: text), self.store.state.downloads.contains(where: { $0.id == id }) else { task.cancel(); continue }
+                        self.tasks[id] = task
+                        self.store.updateDownload(id) { $0.state = task.state == .suspended ? .paused : .downloading }
+                    }
+                    remaining -= 1
+                    guard remaining == 0 else { return }
+                    for id in oldIDs where self.tasks[id] == nil {
+                        self.store.updateDownload(id) { item in
+                            if item.state != .queued && item.state != .paused {
+                                item.state = .interrupted
+                                item.message = "The transfer stopped. Retry to get a fresh episode link."
+                            }
+                        }
+                    }
+                    for item in self.store.state.downloads where item.state == .ready {
+                        if item.localURL.map({ FileManager.default.fileExists(atPath: $0.path) }) != true {
+                            self.store.updateDownload(item.id) { $0.state = .interrupted; $0.message = "The saved file is no longer available on this device." }
+                        }
+                    }
+                    self.restoring = false
+                    self.pump()
+                }
+            }
+        }
+    }
+
+    func enqueue(_ anime: Anime, episode: Int, audio: AudioChoice, provider: String? = nil) {
+        guard !store.state.downloads.contains(where: { $0.anime.id == anime.id && $0.episode == episode && $0.audio == audio }) else { return }
+        store.state.downloads.append(DownloadRecord(anime: anime, episode: episode, audio: audio, provider: provider))
+        store.save()
+        pump()
+    }
+
+    private func pump() {
+        guard !restoring else { return }
+        while tasks.values.filter({ $0.state == .running }).count + preparing.count < 2 {
+            guard let item = store.state.downloads.first(where: { $0.state == .queued && preparing[$0.id] == nil }) else { return }
+            if let task = tasks[item.id] {
+                store.updateDownload(item.id) { $0.state = .downloading; $0.message = nil }
+                task.resume()
+            } else {
+                store.updateDownload(item.id) { $0.state = .resolving; $0.message = nil }
+                preparing[item.id] = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.prepare(item)
+                    self.preparing[item.id] = nil
+                    self.pump()
+                }
+            }
+        }
+    }
+
+    @MainActor private func prepare(_ item: DownloadRecord) async {
+        do {
+            guard store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex in Sources before retrying this download.") }
+            let options = try await CatalogAPI.shared.streams(item.anime, episode: item.episode, audio: item.audio)
+            guard let stream = options.first(where: { item.provider == nil || $0.provider == item.provider }) else { throw KairoError.message("The selected provider is no longer available. Remove this queue item and select another provider.") }
+            try Task.checkCancellation()
+            guard store.state.downloads.contains(where: { $0.id == item.id }) else { return }
+            let network = store.state.preferences.wifiOnly ? "wifi" : "any"
+            let task: URLSessionTask
+            if stream.isHLS {
+                let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+                var downloadOptions: [String: Any] = [:]
+                // Save the selected embedded caption track, if offered. External subtitle URLs
+                // need a separate implementation and are not claimed to be downloaded.
+                if let group = try await asset.loadMediaSelectionGroup(for: .legible),
+                   let english = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first,
+                   let selection = asset.preferredMediaSelection.mutableCopy() as? AVMutableMediaSelection {
+                    selection.select(english, in: group)
+                    downloadOptions[AVAssetDownloadTaskMediaSelectionKey] = selection
+                }
+                try Task.checkCancellation()
+                guard let session = sessions["hls." + network] as? AVAssetDownloadURLSession,
+                      let assetTask = session.makeAssetDownloadTask(asset: asset, assetTitle: "\(item.anime.title) · Episode \(item.episode)", assetArtworkData: nil, options: downloadOptions) else { throw KairoError.message("iOS could not create a download for this HLS stream.") }
+                task = assetTask
+            } else {
+                var request = URLRequest(url: stream.url)
+                request.allHTTPHeaderFields = stream.headers
+                guard let session = sessions["file." + network] else { throw KairoError.message("The download session is unavailable.") }
+                task = session.downloadTask(with: request)
+            }
+            task.taskDescription = item.id.uuidString
+            tasks[item.id] = task
+            store.updateDownload(item.id) { $0.state = .downloading; $0.fraction = 0; $0.message = nil }
+            task.resume()
+        } catch is CancellationError { /* A pause or removal owns the resulting state. */ }
+        catch { store.updateDownload(item.id) { $0.state = .interrupted; $0.message = error.localizedDescription } }
+    }
+
+    func pause(_ id: UUID) {
+        preparing[id]?.cancel()
+        tasks[id]?.suspend()
+        store.updateDownload(id) { $0.state = .paused }
+        pump()
+    }
+    func resume(_ id: UUID) {
+        guard preparing[id] == nil else { return }
+        store.updateDownload(id) { $0.state = .queued; $0.message = nil }
+        pump()
+    }
+    func remove(_ id: UUID) {
+        preparing[id]?.cancel()
+        tasks.removeValue(forKey: id)?.cancel()
+        if let url = store.state.downloads.first(where: { $0.id == id })?.localURL {
+            do { if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) } }
+            catch { store.updateDownload(id) { $0.message = "The file could not be deleted: \(error.localizedDescription)" }; return }
+        }
+        store.state.downloads.removeAll { $0.id == id }
+        store.save()
+        pump()
+    }
+    private func id(_ task: URLSessionTask) -> UUID? { task.taskDescription.flatMap(UUID.init(uuidString:)) }
+
+    func urlSession(_ session: URLSession, assetDownloadTask: AVAssetDownloadTask, didLoad timeRange: CMTimeRange, totalTimeRangesLoaded loadedTimeRanges: [NSValue], timeRangeExpectedToLoad: CMTimeRange) {
+        guard let id = id(assetDownloadTask) else { return }
+        let expected = timeRangeExpectedToLoad.duration.seconds
+        guard expected.isFinite, expected > 0 else { return }
+        let loaded = loadedTimeRanges.reduce(0.0) { $0 + $1.timeRangeValue.duration.seconds }
+        store.updateDownload(id) { $0.fraction = min(0.99, max(0, loaded / expected)) }
+    }
+    func urlSession(_ session: URLSession, assetDownloadTask: AVAssetDownloadTask, didFinishDownloadingTo location: URL) {
+        if let id = id(assetDownloadTask) { remember(location, id: id) }
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard let id = id(downloadTask), totalBytesExpectedToWrite > 0 else { return }
+        store.updateDownload(id) { $0.fraction = min(0.99, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)) }
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let id = id(downloadTask) else { return }
+        guard let response = downloadTask.response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { transferErrors[id] = "The media server did not return a successful download."; return }
+        do {
+            let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Kairo/Downloads", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let target = folder.appendingPathComponent(id.uuidString + ".mp4")
+            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            try FileManager.default.moveItem(at: location, to: target)
+            remember(target, id: id)
+        } catch { transferErrors[id] = error.localizedDescription }
+    }
+    private func remember(_ url: URL, id: UUID) {
+        let prefix = NSHomeDirectory() + "/"
+        guard url.path.hasPrefix(prefix) else { transferErrors[id] = "The download is outside this app's storage."; return }
+        store.updateDownload(id) { $0.relativePath = String(url.path.dropFirst(prefix.count)) }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let id = id(task) else { return }
+        tasks[id] = nil
+        guard let record = store.state.downloads.first(where: { $0.id == id }) else { pump(); return }
+        if let message = transferErrors.removeValue(forKey: id) ?? error?.localizedDescription {
+            store.updateDownload(id) { $0.state = .interrupted; $0.message = message }
+            pump()
+            return
+        }
+        guard let url = record.localURL, FileManager.default.fileExists(atPath: url.path) else {
+            store.updateDownload(id) { $0.state = .interrupted; $0.message = "The transfer finished without a usable local file." }
+            pump()
+            return
+        }
+        let sessionID = session.configuration.identifier ?? ""
+        Self.validations[sessionID, default: 0] += 1
+        Task { @MainActor [weak self] in
+            defer {
+                Self.validations[sessionID, default: 0] -= 1
+                Self.finishIfReady(sessionID)
+            }
+            guard let self else { return }
+            let asset = AVURLAsset(url: url)
+            do {
+                let playable = try await asset.load(.isPlayable)
+                let isHLS = task is AVAssetDownloadTask
+                guard playable, !isHLS || asset.assetCache?.isPlayableOffline == true else { throw KairoError.message("The saved media is not verified for offline playback. Retry the download.") }
+                self.store.updateDownload(id) { $0.state = .ready; $0.fraction = 1; $0.message = nil }
+            } catch { self.store.updateDownload(id) { $0.state = .interrupted; $0.message = error.localizedDescription } }
+            self.pump()
+        }
+    }
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        guard let identifier = session.configuration.identifier else { return }
+        Self.finishedSessions.insert(identifier)
+        Self.finishIfReady(identifier)
+    }
+}
