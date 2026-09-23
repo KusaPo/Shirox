@@ -1,10 +1,13 @@
-ReAnime for ShiroX — beta
+ReAnime for ShiroX — beta 0.1.1
 
-1. Choose modules/reanime-sub.json or modules/reanime-dub.json.
-2. Upload that one file to your own HTTPS host (for example, GitHub), and get its raw file URL.
-3. ShiroX: Settings > Modules > add the raw JSON URL, then select the source.
+Add one or both URLs in ShiroX > Settings > Modules:
+SUB: https://raw.githubusercontent.com/KusaPo/Shirox/main/reanime-sub.json
+DUB: https://raw.githubusercontent.com/KusaPo/Shirox/main/reanime-dub.json
 
-The ChatGPT download link cannot be pasted into ShiroX. These files are not hosted for you.
+Already installed? Refresh/update the module and confirm version 0.1.1.
+If it stays on 0.1.0, remove that module entry and add the same URL again.
+Reopen the title through the updated source and choose an episode.
 
-42 local tests passed using simulated responses. Live site playback and actual iPhone import were NOT verified.
-The one-file manifest uses ShiroX-specific embedded-script fields. See README.md for the conventional two-file fallback and troubleshooting.
+Each main JSON loads its matching hosted JavaScript automatically.
+See README.md for troubleshooting and build instructions.
+44 local tests use synthetic responses. Live iPhone playback is unverified.

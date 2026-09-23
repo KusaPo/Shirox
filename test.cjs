@@ -45,7 +45,7 @@ function defaultCapture() {
 }
 function runtime({ audio = 'sub', fetcher = fixture, capture = defaultCapture, noNetwork = false, noBridge = false, noTimers = false } = {}) {
     const calls = [], browserCalls = [], logs = [];
-    const context = { console: { log: text => logs.push(text) } };
+    const context = { console: { log: text => logs.push(text), warn: text => logs.push(text), error: text => logs.push(text) } };
     if (!noTimers) Object.assign(context, { setTimeout, clearTimeout });
     if (!noBridge) context.fetchv2 = async (url, headers, method, body) => {
         calls.push({ url, headers, method, body });
@@ -175,14 +175,14 @@ test('complete mocked search-to-playback flow yields ShiroX stream and subtitle 
     assert.equal(play.streams.length, 1); assert.equal(play.streams[0].streamUrl, MEDIA);
     assert.equal(play.streams[0].headers.Referer, 'https://flixcloud.cc/');
     assert.equal(play.subtitle, VTT); assert.equal(play.allSubtitles.length, 2);
-    assert.equal(r.browserCalls[0].url, EMBED);
+    assert.equal(r.browserCalls[0].url, EMBED + '?autoPlay=true');
     assert.equal(r.browserCalls[0].options.returnCookies, false);
     assert.equal('Cookie' in play.streams[0].headers, false);
 });
 test('dub playback uses the dub server instead of silently falling back to sub', async () => {
     const r = runtime({ audio: 'dub' });
     const result = JSON.parse(await r.context.extractStreamUrl(episodeKey.replace('lang=sub', 'lang=dub')));
-    assert.match(result.streams[0].title, /^DUB/); assert.equal(r.browserCalls[0].url, EMBED + '-dub');
+    assert.match(result.streams[0].title, /^DUB/); assert.equal(r.browserCalls[0].url, EMBED + '-dub?autoPlay=true');
 });
 test('secondary server endpoint can recover when primary endpoint fails', async () => {
     const r = runtime({ fetcher: url => {
@@ -195,7 +195,7 @@ test('secondary server endpoint can recover when primary endpoint fails', async 
 test('resolver falls back to another eligible server after empty capture', async () => {
     const r = runtime({ fetcher: url => url.includes('/api/watch/') ? reply({ episode_links: [subserver,
         { ...subserver, serverName: 'HD-1', dataLink: EMBED + '-fallback' }] }) : fixture(url),
-        capture: url => url === EMBED ? { success: true, requests: [], html: '' } : defaultCapture() });
+        capture: url => url.split('?')[0] === EMBED ? { success: true, requests: [], html: '' } : defaultCapture() });
     assert.equal(JSON.parse(await r.context.extractStreamUrl(episodeKey)).streams[0].streamUrl, MEDIA);
     assert.equal(r.browserCalls.length, 2);
 });
@@ -252,5 +252,25 @@ test('saved episode audio is preserved and labeled correctly after switching mod
     const r = runtime({ audio: 'dub' });
     const result = JSON.parse(await r.context.extractStreamUrl(episodeKey));
     assert.match(result.streams[0].title, /^SUB/);
-    assert.equal(r.browserCalls[0].url, EMBED);
+    assert.equal(r.browserCalls[0].url, EMBED + '?autoPlay=true');
+});
+
+
+test('player failures emit visible error diagnostics without signed URLs', async () => {
+    const r = runtime({ capture: () => { throw new Error('Request failed at ' + MEDIA); } });
+    let visible = '';
+    r.context.console.error = message => { visible = message; };
+    await assert.rejects(r.context.extractStreamUrl(episodeKey), /URL omitted/);
+    assert.match(visible, /ReAnime 0.1.1/);
+    assert.ok(!visible.includes('token='));
+    assert.ok(!r.logs.join('\n').includes(MEDIA));
+});
+
+test('host player options preserve its parameters and await the rendered video', async () => {
+    const r = runtime();
+    await r.h.captureServer({ dataLink: EMBED + '?v=2#player', serverName: 'HD-2' }, Date.now() + 30000);
+    assert.equal(r.browserCalls[0].url, EMBED + '?v=2&autoPlay=true#player');
+    assert.deepEqual(json(r.browserCalls[0].options.waitForSelectors), ['video']);
+    assert.ok(r.browserCalls[0].options.clickSelectors.includes('.art-icon-play[aria-label="Play"]'));
+    assert.ok(!r.browserCalls[0].options.clickSelectors.includes('video'));
 });

@@ -1,262 +1,52 @@
-TAP version 13
-# Subtest: sub embedded manifest contains identical cached and data-URI scripts
-ok 1 - sub embedded manifest contains identical cached and data-URI scripts
-  ---
-  duration_ms: 3.096206
-  type: 'test'
-  ...
-# Subtest: sub packaged script executes and exposes every required function
-ok 2 - sub packaged script executes and exposes every required function
-  ---
-  duration_ms: 3.922317
-  type: 'test'
-  ...
-# Subtest: dub embedded manifest contains identical cached and data-URI scripts
-ok 3 - dub embedded manifest contains identical cached and data-URI scripts
-  ---
-  duration_ms: 2.038025
-  type: 'test'
-  ...
-# Subtest: dub packaged script executes and exposes every required function
-ok 4 - dub packaged script executes and exposes every required function
-  ---
-  duration_ms: 2.08582
-  type: 'test'
-  ...
-# Subtest: exports the four ShiroX module entry points without browser or Node globals
-ok 5 - exports the four ShiroX module entry points without browser or Node globals
-  ---
-  duration_ms: 4.083944
-  type: 'test'
-  ...
-# Subtest: empty search performs no HTTP request
-ok 6 - empty search performs no HTTP request
-  ---
-  duration_ms: 1.248627
-  type: 'test'
-  ...
-# Subtest: search encodes user text and returns correct ShiroX fields
-ok 7 - search encodes user text and returns correct ShiroX fields
-  ---
-  duration_ms: 4.233179
-  type: 'test'
-  ...
-# Subtest: search filters unavailable language and deduplicates source identifiers
-ok 8 - search filters unavailable language and deduplicates source identifiers
-  ---
-  duration_ms: 3.99366
-  type: 'test'
-  ...
-# Subtest: unknown audio count is not incorrectly treated as zero
-ok 9 - unknown audio count is not incorrectly treated as zero
-  ---
-  duration_ms: 1.537027
-  type: 'test'
-  ...
-# Subtest: search schema changes fail explicitly instead of silently returning no titles
-ok 10 - search schema changes fail explicitly instead of silently returning no titles
-  ---
-  duration_ms: 1.620422
-  type: 'test'
-  ...
-# Subtest: HTTP 403 surfaces source verification guidance
-ok 11 - HTTP 403 surfaces source verification guidance
-  ---
-  duration_ms: 1.408197
-  type: 'test'
-  ...
-# Subtest: HTTP 429 surfaces rate-limit guidance
-ok 12 - HTTP 429 surfaces rate-limit guidance
-  ---
-  duration_ms: 1.277302
-  type: 'test'
-  ...
-# Subtest: HTML in a successful API response is not misparsed as an empty result
-ok 13 - HTML in a successful API response is not misparsed as an empty result
-  ---
-  duration_ms: 2.481085
-  type: 'test'
-  ...
-# Subtest: details strip HTML, preserve line breaks, expose aliases and partial-safe dates
-ok 14 - details strip HTML, preserve line breaks, expose aliases and partial-safe dates
-  ---
-  duration_ms: 3.339961
-  type: 'test'
-  ...
-# Subtest: detail cache avoids refetching fresh metadata
-ok 15 - detail cache avoids refetching fresh metadata
-  ---
-  duration_ms: 2.001431
-  type: 'test'
-  ...
-# Subtest: episode list preserves numeric numbers, sorts and deduplicates
-ok 16 - episode list preserves numeric numbers, sorts and deduplicates
-  ---
-  duration_ms: 2.982681
-  type: 'test'
-  ...
-# Subtest: dub module caps episodes using the reported dub count
-ok 17 - dub module caps episodes using the reported dub count
-  ---
-  duration_ms: 1.73938
-  type: 'test'
-  ...
-# Subtest: episode catalog remains usable when optional details are unavailable
-ok 18 - episode catalog remains usable when optional details are unavailable
-  ---
-  duration_ms: 1.460966
-  type: 'test'
-  ...
-# Subtest: unexpected additional episode pages fail explicitly
-ok 19 - unexpected additional episode pages fail explicitly
-  ---
-  duration_ms: 1.622668
-  type: 'test'
-  ...
-# Subtest: key parsing supports sub/dub and fractional episode numbers
-ok 20 - key parsing supports sub/dub and fractional episode numbers
-  ---
-  duration_ms: 2.31682
-  type: 'test'
-  ...
-# Subtest: source keys reject cross-site URLs and invalid identifiers
-ok 21 - source keys reject cross-site URLs and invalid identifiers
-  ---
-  duration_ms: 1.386916
-  type: 'test'
-  ...
-# Subtest: media URLs reject private destinations and executable schemes
-ok 22 - media URLs reject private destinations and executable schemes
-  ---
-  duration_ms: 1.071589
-  type: 'test'
-  ...
-# Subtest: restricted parser reads safe object-literal subtitles, escapes and trailing commas
-ok 23 - restricted parser reads safe object-literal subtitles, escapes and trailing commas
-  ---
-  duration_ms: 1.59127
-  type: 'test'
-  ...
-# Subtest: restricted parser never executes expressions or changes object prototypes
-ok 24 - restricted parser never executes expressions or changes object prototypes
-  ---
-  duration_ms: 1.3087
-  type: 'test'
-  ...
-# Subtest: subtitle extraction reads metadata and HTML track tags without adding thumbnails
-ok 25 - subtitle extraction reads metadata and HTML track tags without adding thumbnails
-  ---
-  duration_ms: 2.337798
-  type: 'test'
-  ...
-# Subtest: candidate filtering keeps signed URLs intact and excludes ads, token APIs and blob URLs
-ok 26 - candidate filtering keeps signed URLs intact and excludes ads, token APIs and blob URLs
-  ---
-  duration_ms: 1.573914
-  type: 'test'
-  ...
-# Subtest: complete mocked search-to-playback flow yields ShiroX stream and subtitle schema
-ok 27 - complete mocked search-to-playback flow yields ShiroX stream and subtitle schema
-  ---
-  duration_ms: 4.479588
-  type: 'test'
-  ...
-# Subtest: dub playback uses the dub server instead of silently falling back to sub
-ok 28 - dub playback uses the dub server instead of silently falling back to sub
-  ---
-  duration_ms: 2.664715
-  type: 'test'
-  ...
-# Subtest: secondary server endpoint can recover when primary endpoint fails
-ok 29 - secondary server endpoint can recover when primary endpoint fails
-  ---
-  duration_ms: 2.058245
-  type: 'test'
-  ...
-# Subtest: resolver falls back to another eligible server after empty capture
-ok 30 - resolver falls back to another eligible server after empty capture
-  ---
-  duration_ms: 1.698575
-  type: 'test'
-  ...
-# Subtest: soft-sub audio labels remain eligible
-ok 31 - soft-sub audio labels remain eligible
-  ---
-  duration_ms: 1.727573
-  type: 'test'
-  ...
-# Subtest: missing audio servers fail rather than selecting another language
-ok 32 - missing audio servers fail rather than selecting another language
-  ---
-  duration_ms: 1.674792
-  type: 'test'
-  ...
-# Subtest: invalid video response cannot be returned as a successful stream
-ok 33 - invalid video response cannot be returned as a successful stream
-  ---
-  duration_ms: 1.906205
-  type: 'test'
-  ...
-# Subtest: verified alternate referer is returned with the stream
-ok 34 - verified alternate referer is returned with the stream
-  ---
-  duration_ms: 1.500042
-  type: 'test'
-  ...
-# Subtest: direct MP4 validation uses HEAD, never downloads the whole video as text
-ok 35 - direct MP4 validation uses HEAD, never downloads the whole video as text
-  ---
-  duration_ms: 2.241479
-  type: 'test'
-  ...
-# Subtest: subtitle-only HLS manifests are not accepted as video
-ok 36 - subtitle-only HLS manifests are not accepted as video
-  ---
-  duration_ms: 1.486492
-  type: 'test'
-  ...
-# Subtest: missing runtime player capture gives an actionable error
-ok 37 - missing runtime player capture gives an actionable error
-  ---
-  duration_ms: 1.584887
-  type: 'test'
-  ...
-# Subtest: missing HTTP bridge gives an actionable error
-ok 38 - missing HTTP bridge gives an actionable error
-  ---
-  duration_ms: 1.290804
-  type: 'test'
-  ...
-# Subtest: stream lookup rejects a series link with no episode number
-ok 39 - stream lookup rejects a series link with no episode number
-  ---
-  duration_ms: 1.232201
-  type: 'test'
-  ...
-# Subtest: pure parser works with no setTimeout or browser APIs
-ok 40 - pure parser works with no setTimeout or browser APIs
-  ---
-  duration_ms: 1.224774
-  type: 'test'
-  ...
-# Subtest: module logs never contain signed media or subtitle URLs
-ok 41 - module logs never contain signed media or subtitle URLs
-  ---
-  duration_ms: 2.039942
-  type: 'test'
-  ...
-# Subtest: saved episode audio is preserved and labeled correctly after switching modules
-ok 42 - saved episode audio is preserved and labeled correctly after switching modules
-  ---
-  duration_ms: 1.861198
-  type: 'test'
-  ...
-1..42
-# tests 42
-# suites 0
-# pass 42
-# fail 0
-# cancelled 0
-# skipped 0
-# todo 0
-# duration_ms 178.72273
+✔ sub embedded manifest contains identical cached and data-URI scripts (1.970953ms)
+✔ sub packaged script executes and exposes every required function (1.879847ms)
+✔ dub embedded manifest contains identical cached and data-URI scripts (1.42113ms)
+✔ dub packaged script executes and exposes every required function (1.466137ms)
+✔ exports the four ShiroX module entry points without browser or Node globals (3.386805ms)
+✔ empty search performs no HTTP request (0.78058ms)
+✔ search encodes user text and returns correct ShiroX fields (3.011363ms)
+✔ search filters unavailable language and deduplicates source identifiers (2.111895ms)
+✔ unknown audio count is not incorrectly treated as zero (1.188461ms)
+✔ search schema changes fail explicitly instead of silently returning no titles (1.452597ms)
+✔ HTTP 403 surfaces source verification guidance (1.543894ms)
+✔ HTTP 429 surfaces rate-limit guidance (0.885918ms)
+✔ HTML in a successful API response is not misparsed as an empty result (0.848892ms)
+✔ details strip HTML, preserve line breaks, expose aliases and partial-safe dates (2.857182ms)
+✔ detail cache avoids refetching fresh metadata (1.026107ms)
+✔ episode list preserves numeric numbers, sorts and deduplicates (1.612557ms)
+✔ dub module caps episodes using the reported dub count (1.248691ms)
+✔ episode catalog remains usable when optional details are unavailable (0.913549ms)
+✔ unexpected additional episode pages fail explicitly (0.836403ms)
+✔ key parsing supports sub/dub and fractional episode numbers (0.725427ms)
+✔ source keys reject cross-site URLs and invalid identifiers (0.803243ms)
+✔ media URLs reject private destinations and executable schemes (0.696614ms)
+✔ restricted parser reads safe object-literal subtitles, escapes and trailing commas (1.163854ms)
+✔ restricted parser never executes expressions or changes object prototypes (0.788992ms)
+✔ subtitle extraction reads metadata and HTML track tags without adding thumbnails (1.919307ms)
+✔ candidate filtering keeps signed URLs intact and excludes ads, token APIs and blob URLs (1.102322ms)
+✔ complete mocked search-to-playback flow yields ShiroX stream and subtitle schema (3.307386ms)
+✔ dub playback uses the dub server instead of silently falling back to sub (2.466096ms)
+✔ secondary server endpoint can recover when primary endpoint fails (1.523172ms)
+✔ resolver falls back to another eligible server after empty capture (1.351886ms)
+✔ soft-sub audio labels remain eligible (1.132417ms)
+✔ missing audio servers fail rather than selecting another language (1.061351ms)
+✔ invalid video response cannot be returned as a successful stream (1.06778ms)
+✔ verified alternate referer is returned with the stream (1.025156ms)
+✔ direct MP4 validation uses HEAD, never downloads the whole video as text (0.891876ms)
+✔ subtitle-only HLS manifests are not accepted as video (0.879648ms)
+✔ missing runtime player capture gives an actionable error (0.910715ms)
+✔ missing HTTP bridge gives an actionable error (0.809113ms)
+✔ stream lookup rejects a series link with no episode number (0.717386ms)
+✔ pure parser works with no setTimeout or browser APIs (1.672066ms)
+✔ module logs never contain signed media or subtitle URLs (1.051616ms)
+✔ saved episode audio is preserved and labeled correctly after switching modules (1.012718ms)
+✔ player failures emit visible error diagnostics without signed URLs (0.972747ms)
+✔ host player options preserve its parameters and await the rendered video (1.051556ms)
+ℹ tests 44
+ℹ suites 0
+ℹ pass 44
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 143.705031

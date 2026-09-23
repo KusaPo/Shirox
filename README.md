@@ -1,148 +1,136 @@
-# ReAnime for ShiroX — beta 0.1.0
+# ReAnime for ShiroX — beta 0.1.1
 
-Created September 22, 2026. Unofficial community module; not affiliated with
-ShiroX, ReAnime, or the video hosts.
+Unofficial community module for ReAnime, with separate SUB and DUB sources.
+Not affiliated with ShiroX, ReAnime, or the video hosts.
 
-## What is included
+## Install or update
 
-`modules/reanime-sub.json` is the Japanese-audio/subtitle source.
-`modules/reanime-dub.json` is the English-dub source. Install either or both.
-Each JSON includes its own JavaScript, so the one-file installation method does
-not require hosting a separate JavaScript file. The `.js` files are also included
-for inspection and conventional hosting.
+Use these **raw JSON URLs** in ShiroX → Settings → Modules:
 
-The module implements search, title details, episode lists, automatic server
-fallback, HLS/MP4 discovery, media-link validation, and subtitle metadata. A
-subtitle track can only be offered when the player exposes it. English is
-selected when a track is clearly labeled English; other tracks remain available
-in ShiroX's subtitle menu.
+| Source | Import URL |
+| --- | --- |
+| SUB | https://raw.githubusercontent.com/KusaPo/Shirox/main/reanime-sub.json |
+| DUB | https://raw.githubusercontent.com/KusaPo/Shirox/main/reanime-dub.json |
 
-## Important testing status
+1. Copy the full URL for the version you want.
+2. Open ShiroX → Settings → Modules and use the module-add control.
+3. Paste the URL. Install both if you want both audio choices.
+4. Select the ReAnime source, search for a title, open its episodes, and play one.
 
-This is a **beta**, not a confirmed-working live release. The module was checked
-against ShiroX's public module/runtime source and a current public ReAnime
-integration. The included local tests use **invented, simulated API and player
-responses**. They check code behavior, not ReAnime's availability, real browser
-capture, or video playback on an iPhone.
+**Already installed 0.1.0?** Use the app's module refresh/update option if available.
+Check that the installed version is **0.1.1**. If it remains 0.1.0, remove that
+ReAnime module entry and add the same URL again. Reopen the title from the updated
+source. Uploading an update to GitHub does not necessarily refresh a cached module.
 
-I could not make a successful live ReAnime API request from the research
-environment, and did not run ShiroX on an iOS device. That does not establish that
-the website is down. An installed app build or a changed website/player can
-require adjustments.
+The repository-root JSON now points to a normal HTTPS JavaScript file beside it.
+Keep both the JSON and matching JS hosted. You only import the JSON URL in ShiroX.
+Do not paste GitHub file-preview (`github.com/.../blob/...`) URLs into the app.
 
-## Install: one hosted JSON file
+## What changed in 0.1.1
 
-**A ChatGPT download link is not a ShiroX import URL.** ShiroX's documented import
-flow is Settings → Modules, using a URL to raw JSON. The download has not been
-published or uploaded to an account for you.
+- Published conventional HTTPS script URLs instead of embedding the entire script
+  in the main manifests. `modules/` retains optional embedded copies.
+- Flixcloud capture now requests the same `autoPlay=true` option seen on the
+  website, waits for a video element, and targets the observed Artplayer Play
+  control. It no longer clicks the video element itself, which can toggle pause.
+- Progress messages now use ShiroX's General log channel when available.
+- Errors report runtime support, server API status, media candidate counts,
+  and individual server failures. Final failures are also written as Error logs.
+- Diagnostic messages omit URLs so they do not expose signed media links.
 
-1. Extract this ZIP. Choose `modules/reanime-sub.json` or
-   `modules/reanime-dub.json`.
-2. Upload that JSON file to your own GitHub repository or another HTTPS host that
-   serves the file itself, without login. On GitHub, open the uploaded file and
-   use **Raw** to obtain its direct URL. Do not use the GitHub `blob` page URL.
-3. In ShiroX, open **Settings → Modules**, use the module-add control, and paste
-   that raw JSON URL. Select the installed ReAnime source, then search for a
-   title. Repeat with the other JSON to install both audio choices.
+This is a compatibility and diagnostics update. It is **not a confirmed fix for
+all playback failures**. The original 0.1.0 build was reported to stall while
+fetching streams on both audio variants.
 
-The one-file manifests deliberately use `scriptContent` plus a `data:`
-`scriptUrl` containing the identical code. Current ShiroX source accepts the
-cached-script field and runs it; no fake public JavaScript hosting URL or
-placeholder is used. This convenience packaging is **not device-tested** and
-is ShiroX-specific. A module appearing in the list alone does not establish that
-its script or playback works.
+## Testing status
 
-## Conventional two-file installation (more portable)
+**44 local tests pass using synthetic responses.** These validate parsing,
+server fallback, audio selection, response validation, packaging, and diagnostics.
+They do not prove that an iPhone can play the current video host's streams.
 
-Use this route when your ShiroX build does not accept the embedded manifest, or
-when maintaining a conventional hosted module repository.
+During investigation, the live ReAnime page for Solo Leveling episode 1 loaded
+its server choices and a Flixcloud player. The player exposed a blob video source,
+but successful video playback was not established in this environment. The
+current iPhone import and playback flow still requires device verification.
 
-On a computer with Node.js, run this in the extracted directory, replacing the
-example folder URL with the actual public folder where you will upload files:
+## If it says fetching streams or no streams
 
-```sh
-node build.cjs https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPOSITORY/main
-```
+1. Confirm the installed version is 0.1.1 and reopen the episode from that source.
+2. Try the same episode and audio choice on ReAnime in your phone's browser.
+3. After a failed attempt, inspect ShiroX → Settings → App Logs. Include General
+   and Error entries if the app offers log filters. Look for **ReAnime**.
+4. Report the anime, episode, SUB/DUB, ShiroX app version, final error text, and
+   whether that episode works in your phone's browser. A screenshot is fine.
 
-The command creates `hosted/reanime-sub.json`, `hosted/reanime-sub.js`,
-`hosted/reanime-dub.json`, and `hosted/reanime-dub.js`. It prints the JSON URLs
-that will work **after** you upload those files to the specified location.
-It does not create a repository, upload files, or publish anything.
+| Message | What it tells us |
+| --- | --- |
+| No ReAnime messages at all | The script may not have loaded or been called; confirm the module version and import URL. |
+| `networkFetch=false` | This app build lacks the browser capture feature required by this module. |
+| Server API HTTP 403 or 429 | A source request was denied or rate limited; complete verification only if ShiroX offers it. |
+| Found 0 eligible servers | ReAnime returned no matching audio servers, or its response format changed. |
+| Player capture has 0 media candidates | The embedded player did not expose a supported HLS/MP4 link to the app. |
+| Media check HTTP error | A captured link was rejected when checked; host headers, expiry, or network access may be involved. |
+| Response is not a plain HLS playlist | The host returned another payload; the current native playback integration cannot use it. |
+| TVDB artwork request cancelled (`-999`) | An artwork request was cancelled; this alone does not identify a stream failure. |
 
-Upload the desired JSON and its matching JS, then import the JSON's raw URL in
-ShiroX. Both audio variants can be installed. Rebuilding without a URL recreates
-the one-file manifests:
+The module cannot guarantee compatibility with every host, cookie-bound stream,
+codec, encrypted/custom playlist response, or future website change. A title
+appearing in search does not establish that playback works.
+
+## How it works
+
+Search, details, and episode lists use ReAnime's `/api/v1/` routes. Server lookup
+uses `/api/watch/{slug}/{episode}` and, when an AniList ID is available,
+`/api/flix/{id}/{episode}`. SUB and DUB are filtered separately.
+
+For each eligible server, ShiroX's `networkFetch` loads the embedded player and
+collects its media requests. The module prefers HLS, validates the response, and
+returns ShiroX's stream and subtitle result format. It tries HD-2 before HD-1 and
+attempts up to three servers. It does not include the host's decryption code or
+require a separately deployed API server.
+
+Subtitles are offered when the player exposes suitable tracks. English is
+preferred when explicitly labeled. Quality choices depend on the host's playlist;
+1080p availability is not guaranteed. Large series currently use a request limit
+of 2,000 episode records, and an advertised next page causes an explicit error.
+
+## Files
+
+| File | Purpose |
+| --- | --- |
+| `reanime-sub.json`, `reanime-dub.json` | Public import manifests. |
+| `reanime-sub.js`, `reanime-dub.js` | Hosted scripts used by the main manifests. |
+| `reanime-core.js` | Shared source for both audio variants. |
+| `modules/` | Generated embedded-script manifests and corresponding JS, retained for tests and optional use. |
+| `build.cjs` | Generates the manifests and per-audio scripts. |
+| `test.cjs`, `manifest-test.cjs` | Local tests with simulated network responses. |
+| `test-results.txt` | Output from the latest local test run. |
+| `SOURCES.md` | Upstream interoperability references. |
+| `START-HERE.txt` | Short setup instructions. |
+| `SHA256SUMS.txt` | SHA-256 file integrity hashes. |
+
+## Build and test
+
+Use Node.js 18 or newer. No npm dependencies are needed.
 
 ```sh
 node build.cjs
-```
-
-## How playback is implemented
-
-Search and metadata use ReAnime's `/api/v1/` interfaces. Episode server discovery
-uses its `/api/watch/` route and, when an AniList ID is available, its `/api/flix/`
-route. SUB and DUB are never silently substituted for each other.
-
-The resolver loads an eligible embedded video player through ShiroX's built-in
-`networkFetch` browser bridge. It collects HLS/MP4 URLs exposed by the player's
-normal execution, verifies a candidate, and returns ShiroX's stream/subtitle
-JSON shape. It does **not** implement the third-party host's changing decryption
-algorithm or require a separately deployed API server.
-
-It prioritizes HD-2, then HD-1, and attempts up to three eligible servers. It
-returns the first verified usable server rather than populating every server in
-the player. HLS master playlists are preferred; quality availability is whatever
-the server provides, not a guaranteed resolution. Sources with extensionless
-media URLs, players that do not expose a supported video request, or unsupported
-codecs can fail. Media verification does not prove every segment can be played.
-
-## Troubleshooting
-
-- **Import fails:** confirm the URL opens raw JSON, not an HTML file-preview page
-  or login page. Use the conventional two-file build when embedded-script
-  packaging is not accepted by your installed app.
-- **Search reports HTTP 403 / 429 or a non-JSON response:** complete a source
-  verification flow only when ShiroX offers it; otherwise check the site in your
-  browser and retry later. This module does not solve verification challenges.
-- **Titles load but playback fails:** the embedded player, app's browser bridge,
-  or CDN requirements may have changed. Verify that the same episode and audio
-  choice play on the site. Check **Settings → App Logs** for `[ReAnime ...]`
-  messages. The logs do not intentionally print signed video URLs or cookies.
-- **No English subtitles:** check the subtitle menu. Not all servers publish an
-  external English track. Hard-subbed video does not need a separate subtitle
-  track. Subtitle parsing and URL delivery are implemented; every subtitle format
-  has not been device-tested.
-- **Dub has fewer episodes:** the source filters by ReAnime's reported dub count;
-  it does not assume that every subbed episode has a dub.
-- **Large series:** the source requests up to 2,000 episode records, matching the
-  inspected integration. It raises an error when the response advertises another
-  page. A changed/undocumented server-side cap may still require updating it.
-- **Switching audio for a saved show:** select the other source and choose that
-  source's title/episode result. A saved episode URL preserves its audio choice.
-
-## Privacy and limitations
-
-The module has no analytics, user-account access, paid dependency, or additional
-proxy/API service. Direct API requests go to ReAnime; player, video, and subtitle
-requests go to the hosts exposed by that site. Embedded pages may make their own
-requests, including advertising requests. The module filters obvious ad media
-from playback candidates, but it is **not** a browser ad blocker.
-
-It does not forward ShiroX's unscoped browser-cookie collection to unrelated
-hosts. Some cookie- or user-agent-bound streams may therefore need app-specific
-support. It does not intentionally bypass ShiroX's host/content filters or a
-site's user-verification prompts. Use it only for content you are authorized to
-access.
-
-## Reproduce the checks
-
-No npm installation is required. Tests need Node.js 18+ with `node:test`.
-
-```sh
+node build.cjs https://raw.githubusercontent.com/KusaPo/Shirox/main
 node --check reanime-core.js
 node --test test.cjs manifest-test.cjs
 ```
 
-See `test-results.txt` for the run included with this package. See `SOURCES.md`
-for the public technical references. These checks are intentionally separated
-from a live, end-to-end device test, which has not been performed.
+The first command writes embedded copies to `modules/`. The second writes
+conventional files to `hosted/`. Publish the four generated `hosted/` files at
+the repository root to maintain the import URLs above. If hosting elsewhere,
+replace the base URL with your actual HTTPS folder URL. The build script does
+not upload anything. After source edits, rebuild both formats, rerun tests, and
+update the published files and hashes together.
+
+## Privacy
+
+The module has no analytics or account login. Requests go to ReAnime and the
+player/media/subtitle hosts it returns. Embedded pages may make their own
+requests. The module does not intentionally log signed URLs or forward the app's
+unscoped browser-cookie collection to unrelated hosts. It is not an ad blocker.
+Use content you are authorized to access.

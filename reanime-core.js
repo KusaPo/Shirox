@@ -1,5 +1,5 @@
 /*
- * ReAnime for ShiroX — 0.1.0 beta, 2026-09-22.
+ * ReAnime for ShiroX — 0.1.1 beta, 2026-09-23.
  * Original integration; not affiliated with ShiroX, ReAnime, or video hosts.
  * Runtime: ShiroX fetchv2 + networkFetch (no Node, DOM, eval, or external JS).
  * The build prepends var REANIME_AUDIO = "sub" or "dub".
@@ -9,7 +9,7 @@ var ReAnime = (function () {
     "use strict";
     var BASE = "https://reanime.to";
     var AUDIO = typeof REANIME_AUDIO === "string" && REANIME_AUDIO === "dub" ? "dub" : "sub";
-    var VERSION = "0.1.0";
+    var VERSION = "0.1.1";
     var detailCache = Object.create(null);
     var detailOrder = [];
     var CACHE_MS = 180000;
@@ -19,9 +19,15 @@ var ReAnime = (function () {
 
     function error(message) { return new Error("ReAnime: " + message); }
     function log(message) {
-        if (typeof console !== "undefined" && typeof console.log === "function") {
-            console.log("[ReAnime " + AUDIO.toUpperCase() + "] " + message);
+        if (typeof console !== "undefined") {
+            // ShiroX stores warn messages as General; log messages are Debug.
+            var write = typeof console.warn === "function" ? console.warn : console.log;
+            if (typeof write === "function") write("[ReAnime " + AUDIO.toUpperCase() + " " + VERSION + "] " + message);
         }
+    }
+    function safeFailure(err) {
+        return String(err && err.message || err || "Unknown error")
+            .replace(/https?:\/\/[^\s<>"']+/gi, "[URL omitted]").slice(0, 220);
     }
     function numeric(value) {
         if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
@@ -110,6 +116,7 @@ var ReAnime = (function () {
     }
     async function api(path, deadline) {
         var response = await request(BASE + path, { Accept: "application/json, */*", Referer: BASE + "/" }, "GET", deadline);
+        if (/^\/api\/(?:watch|flix)\//.test(path)) log("Server API returned HTTP " + (Number(response && response.status) || 0) + ".");
         if (!statusOK(response)) {
             var status = Number(response && response.status) || 0;
             if (status === 403 || status === 429) throw error("Source returned HTTP " + status + ". Complete any verification offered by ShiroX, or retry later.");
@@ -362,10 +369,10 @@ var ReAnime = (function () {
         for (var i = 0; i < headerOptions.length; i++) {
             try {
                 var response = await request(url, headerOptions[i], kind === "mp4" ? "HEAD" : "GET", deadline, 5000);
-                if (!statusOK(response)) continue;
+                if (!statusOK(response)) { log("Media check returned HTTP " + (Number(response && response.status) || 0) + "."); continue; }
                 if (kind === "hls") {
                     var text = String(await response.text()).replace(/^\uFEFF/, "").trim();
-                    if (!/^#EXTM3U(?:\r?\n|$)/.test(text)) continue;
+                    if (!/^#EXTM3U(?:\r?\n|$)/.test(text)) { log("Media response is not a plain HLS playlist; native playback cannot use this response."); continue; }
                     // A subtitle playlist is not a playable video source.
                     if (!/#EXT-X-STREAM-INF:/.test(text) && /\.(?:vtt|srt)(?:\?|\s|$)/i.test(text)) continue;
                     return { url: url, headers: headerOptions[i], master: /#EXT-X-STREAM-INF:/.test(text) };
@@ -387,21 +394,29 @@ var ReAnime = (function () {
             return { streams: [{ title: audio.toUpperCase() + " · " + String(server.serverName || "Direct"), streamUrl: direct.url, headers: direct.headers }], subtitle: "", allSubtitles: [] };
         }
         if (typeof networkFetch !== "function") throw error("This ShiroX build does not provide networkFetch, which this player requires.");
+        // Match the public website's player option. Preserve all other parameters.
+        var playerURL = embedURL;
+        if (/^https:\/\/(?:www\.)?flixcloud\.cc\//i.test(embedURL) && !/[?&]autoPlay=/i.test(embedURL)) {
+            var hashAt = embedURL.indexOf("#"), fragment = hashAt < 0 ? "" : embedURL.slice(hashAt);
+            playerURL = (hashAt < 0 ? embedURL : embedURL.slice(0, hashAt));
+            playerURL += (playerURL.indexOf("?") < 0 ? "?" : "&") + "autoPlay=true" + fragment;
+        }
         var seconds = Math.min(PLAYER_SECONDS, Math.floor(remaining(deadline, PLAYER_SECONDS * 1000 + 1000) / 1000));
         if (seconds < 2) throw error("Playback lookup timed out.");
         // Let the site's own player resolve its stream inside ShiroX. No copied
         // decryption keys, remote script evaluation in JSCore, or API service.
-        var capture = await bounded(networkFetch(embedURL, {
+        var capture = await bounded(networkFetch(playerURL, {
             timeoutSeconds: seconds,
             headers: { Referer: BASE + "/" },
             returnHTML: true,
             returnCookies: false,
-            waitForSelectors: [],
-            clickSelectors: ["video", 'button[aria-label="Play"]', '.vjs-big-play-button', '.jw-icon-display'],
-            maxWaitTime: 3
+            waitForSelectors: ["video"],
+            clickSelectors: ['.art-icon-play[aria-label="Play"]', 'button[aria-label="Play"]', '.vjs-big-play-button', '.jw-icon-display'],
+            maxWaitTime: 5
         }), remaining(deadline, (seconds + 4) * 1000));
-        if (!capture || capture.success === false) throw error("The embedded player could not be loaded.");
+        if (!capture || capture.success === false) throw error("The embedded player could not be loaded. " + safeFailure(capture && capture.error));
         var urls = candidates(capture, embedURL).slice(0, 4);
+        log("Player capture: " + (Array.isArray(capture.requests) ? capture.requests.length : 0) + " requests, " + urls.length + " media candidates.");
         if (!urls.length) throw error("The player did not expose an HLS or MP4 stream.");
         var fallback = null, selected = null;
         for (var i = 0; i < urls.length; i++) {
@@ -425,6 +440,7 @@ var ReAnime = (function () {
         };
     }
     async function streams(key) {
+        log("Playback lookup started; fetchv2=" + (typeof fetchv2 === "function") + ", networkFetch=" + (typeof networkFetch === "function") + ".");
         var info = keyInfo(key), deadline = Date.now() + STREAM_BUDGET_MS;
         if (info.episode === null) throw error("Open an episode before requesting playback.");
         var al = info.anilist;
@@ -437,7 +453,7 @@ var ReAnime = (function () {
         if (al > 0) tasks.push(settle(api("/api/flix/" + al + "/" + info.episode, deadline)));
         var responses = await Promise.all(tasks), servers = [], seen = Object.create(null);
         responses.forEach(function (entry, index) {
-            if (entry.error) { log((index === 0 ? "Primary" : "Secondary") + " server endpoint failed."); return; }
+            if (entry.error) { log((index === 0 ? "Primary" : "Secondary") + " server endpoint failed: " + safeFailure(entry.error)); return; }
             var data = entry.data || {};
             var rows = index === 0 ? data.episode_links : data.success ? data.servers : [];
             if (!Array.isArray(rows)) return;
@@ -449,6 +465,7 @@ var ReAnime = (function () {
         });
         function priority(row) { return row.serverName === "HD-2" ? 0 : row.serverName === "HD-1" ? 1 : 2; }
         servers.sort(function (a, b) { return priority(a) - priority(b); });
+        log("Found " + servers.length + " eligible " + info.audio.toUpperCase() + " servers for " + info.slug + " episode " + info.episode + ".");
         if (!servers.length) {
             if (responses.every(function (r) { return !!r.error; })) throw responses[0].error;
             throw error("No " + info.audio.toUpperCase() + " servers are available for this episode.");
@@ -462,7 +479,7 @@ var ReAnime = (function () {
                 return JSON.stringify(result);
             } catch (err) {
                 last = err;
-                log("Server attempt " + (i + 1) + " failed; trying another when available.");
+                log("Server attempt " + (i + 1) + " failed: " + safeFailure(err));
                 if (deadline - Date.now() < 2000) break;
             }
         }
@@ -477,4 +494,11 @@ var ReAnime = (function () {
 async function searchResults(keyword) { return await ReAnime.search(keyword); }
 async function extractDetails(url) { return await ReAnime.details(url); }
 async function extractEpisodes(url) { return await ReAnime.episodes(url); }
-async function extractStreamUrl(url) { return await ReAnime.streams(url); }
+async function extractStreamUrl(url) {
+    try { return await ReAnime.streams(url); }
+    catch (err) {
+        var message = String(err && err.message || err || "Unknown playback failure").replace(/https?:\/\/[^\s<>"']+/gi, "[URL omitted]").slice(0, 350);
+        if (typeof console !== "undefined" && typeof console.error === "function") console.error("[ReAnime 0.1.1] " + message);
+        throw new Error(message);
+    }
+}

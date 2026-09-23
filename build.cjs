@@ -24,7 +24,7 @@ for (const audio of ['sub', 'dub']) {
     const module = {
         sourceName: 'ReAnime ' + audio.toUpperCase() + ' (Beta)',
         author: { name: 'Community module — unofficial' },
-        version: '0.1.0',
+        version: '0.1.1',
         baseUrl: 'https://reanime.to',
         searchBaseUrl: 'https://reanime.to/api/v1/search?q=',
         scriptUrl: base ? base.replace(/\/$/, '') + '/' + name + '.js' :

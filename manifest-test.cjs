@@ -12,7 +12,7 @@ for (const audio of ['sub', 'dub']) {
         assert.equal(manifest.type, 'anime'); assert.equal(manifest.asyncJS, true);
         assert.equal(manifest.scriptContent, script);
         assert.equal(Buffer.from(manifest.scriptUrl.split(',')[1], 'base64').toString('utf8'), script);
-        assert.equal(manifest.version, '0.1.0');
+        assert.equal(manifest.version, '0.1.1');
         assert.equal(manifest.baseUrl, 'https://reanime.to');
         assert.ok(!manifest.scriptUrl.includes('YOUR_'));
         assert.doesNotThrow(() => new URL(manifest.scriptUrl));
