@@ -21,11 +21,22 @@ struct AnimeDetailView: View {
     @State private var pendingQueued = false
     @State private var customEpisode = 1
     @State private var queued = false
+    @State private var episodePage = 1
+    @State private var episodeDetails: [Int: EpisodeMetadata] = [:]
+    @State private var metadataBusy = false
+    @State private var metadataNotice: String?
+    @State private var metadataRetry = UUID()
+    @State private var initialized = false
     private var title: Anime { resolved ?? anime }
+    private var pageCount: Int { max(1, (min(title.episodeCount ?? 0, 5000) + 99) / 100) }
+    private var visiblePage: Int { min(max(1, episodePage), pageCount) }
+    private var metadataPage: Int {
+        (title.episodeCount ?? 0) > 0 ? visiblePage : (customEpisode - 1) / 100 + 1
+    }
     var body: some View {
         List {
             Section {
-                Artwork(url: title.banner ?? title.cover).frame(height: 225).clipped().listRowInsets(EdgeInsets())
+                AnimeArtwork(anime: title).aspectRatio(2.8, contentMode: .fit).clipped().listRowInsets(EdgeInsets())
                 Text(title.title).font(.title.bold())
                 if !title.genres.isEmpty { Text(title.genres.prefix(3).joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary) }
                 HStack {
@@ -42,17 +53,52 @@ struct AnimeDetailView: View {
             if let error { ProblemView(message: error) { reload = UUID() } }
             if resolved != nil {
                 Section {
+                    if metadataBusy { ProgressView("Loading episode details…").font(.caption) }
+                    if let metadataNotice {
+                        HStack {
+                            Text(metadataNotice).font(.caption).foregroundStyle(.secondary)
+                            Button("Retry") { metadataRetry = UUID() }.font(.caption)
+                        }
+                    }
                     if let count = title.episodeCount, count > 0 {
-                        ForEach(1...min(count, 5000), id: \.self) { episode in episodeRow(episode) }
+                        if pageCount > 1 {
+                            Picker("Episode range", selection: $episodePage) {
+                                ForEach(1...pageCount, id: \.self) { page in
+                                    Text("\((page - 1) * 100 + 1)–\(min(page * 100, count))").tag(page)
+                                }
+                            }
+                        }
+                        ForEach(((visiblePage - 1) * 100 + 1)...min(visiblePage * 100, count, 5000), id: \.self) { episode in episodeRow(episode) }
                     } else {
                         Text("This source did not provide an episode count. Choose an episode number to check availability.").font(.caption)
                         Stepper("Episode \(customEpisode)", value: $customEpisode, in: 1...5000)
                         episodeRow(customEpisode)
                     }
-                } header: { Text("Episodes") } footer: { Text("Listed episode counts do not guarantee stream availability in both languages.") }
+                } header: { Text("Episodes") } footer: { Text("Titles and previews from AniList / MyAnimeList via Jikan, when available. Some episodes have no preview. Stream availability can differ by language.") }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            guard !initialized else { return }
+            episodePage = max(1, (initialEpisode - 1) / 100 + 1)
+            customEpisode = min(5000, max(1, initialEpisode))
+            initialized = true
+        }
+        .task(id: "\(title.id)|\(title.malID ?? 0)|\(metadataPage)|\(metadataRetry)") {
+            episodeDetails = [:]; metadataNotice = nil; metadataBusy = true
+            do {
+                let details = try await EpisodeMetadataAPI.shared.episodes(for: title, page: metadataPage)
+                try Task.checkCancellation()
+                episodeDetails = details.episodes
+                metadataNotice = details.notice
+                metadataBusy = false
+            } catch {
+                if !Task.isCancelled {
+                    metadataBusy = false
+                    metadataNotice = "Episode details could not be loaded. You can still choose an episode."
+                }
+            }
+        }
         .task(id: reload) {
             busy = true; error = nil
             defer { busy = false }
@@ -87,10 +133,15 @@ struct AnimeDetailView: View {
     private func episodeRow(_ episode: Int) -> some View {
         HStack {
             Button { action = EpisodeAction(episode: episode, download: false) } label: {
-                HStack {
-                    Text(String(format: "%02d", episode)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 28)
-                    VStack(alignment: .leading) {
-                        Text("Episode \(episode)")
+                HStack(spacing: 12) {
+                    EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail)
+                        .frame(width: 100, height: 100 * 9 / 16)
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Episode \(episode)").font(.caption).foregroundStyle(.secondary)
+                        if let name = episodeDetails[episode]?.title {
+                            Text(name).font(.subheadline.weight(.semibold)).lineLimit(3)
+                        }
                         if let progress = store.progress(title, episode: episode) {
                             Text(progress.finished ? "Watched" : "Continue at \(Int(progress.seconds / 60)) min").font(.caption).foregroundStyle(.secondary)
                         }
@@ -99,6 +150,28 @@ struct AnimeDetailView: View {
             }.buttonStyle(.plain)
             Button { action = EpisodeAction(episode: episode, download: true) } label: { Image(systemName: "arrow.down.to.line").frame(width: 44, height: 44) }.buttonStyle(.borderless).accessibilityLabel("Download episode \(episode)")
         }
+    }
+}
+
+struct EpisodeThumbnail: View {
+    let url: URL?
+    var body: some View {
+        GeometryReader { geometry in
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                } else {
+                    ZStack {
+                        Theme.purple.opacity(0.12)
+                        VStack(spacing: 3) {
+                            Image(systemName: "film")
+                            Text("No preview").font(.caption2)
+                        }.foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }.accessibilityHidden(true)
     }
 }
 

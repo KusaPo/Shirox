@@ -107,7 +107,7 @@ struct SourcesView: View {
                 Toggle("Wi-Fi only for new transfers", isOn: Binding(get: { store.state.preferences.wifiOnly }, set: { store.state.preferences.wifiOnly = $0; store.save() }))
                 Text("Existing transfers retain their original network policy. Removing a download keeps your viewing history.").font(.caption).foregroundStyle(.secondary)
             }
-            Section("Your data") { Text("Your library, history and download records are saved on this device. Catalog searches contact AniList or the enabled source; media comes from the provider you select.").font(.caption) }
+            Section("Your data") { Text("Your library, history and download records are saved on this device. Catalog searches contact AniList or the enabled source. Episode details also use MyAnimeList metadata through Jikan; media comes from the provider you select.").font(.caption) }
         }.navigationTitle("Sources & preferences")
     }
     @MainActor private func inspect() async {

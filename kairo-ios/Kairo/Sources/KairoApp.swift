@@ -64,18 +64,14 @@ struct RootView: View {
 
 struct Artwork: View {
     let url: URL?
+    var contentMode: ContentMode = .fill
     var body: some View {
         GeometryReader { geometry in
             AsyncImage(url: url) { phase in
                 ZStack {
                     LinearGradient(colors: [Theme.purple.opacity(0.25), .indigo.opacity(0.35)], startPoint: .topTrailing, endPoint: .bottomLeading)
                     if let image = phase.image {
-                        // The backdrop fills spare space; the foreground always shows
-                        // the complete artwork, whether it is a banner or a poster.
-                        image.resizable().scaledToFill()
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped().blur(radius: 24).opacity(0.25)
-                        image.resizable().scaledToFit()
+                        image.resizable().aspectRatio(contentMode: contentMode)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                     } else {
                         Image(systemName: "sparkles.tv").font(.title2).foregroundStyle(Theme.purple)
@@ -83,6 +79,26 @@ struct Artwork: View {
                 }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
             }
         }.accessibilityHidden(true)
+    }
+}
+
+// Wide banners get a wide frame, instead of being enlarged into a tall card.
+// When only a portrait poster exists, keep it intact over a full-bleed backdrop.
+struct AnimeArtwork: View {
+    let anime: Anime
+    var body: some View {
+        GeometryReader { geometry in
+            if let banner = anime.banner {
+                Artwork(url: banner)
+            } else {
+                ZStack {
+                    Artwork(url: anime.cover).blur(radius: 18)
+                    Color.black.opacity(0.2)
+                    Artwork(url: anime.cover, contentMode: .fit)
+                        .frame(width: geometry.size.height * 2 / 3)
+                }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
+            }
+        }
     }
 }
 

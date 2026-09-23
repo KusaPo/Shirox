@@ -2,6 +2,35 @@ import XCTest
 @testable import Kairo
 
 final class KairoTests: XCTestCase {
+    func testEpisodePreviewsMatchExplicitNumbersNotArrayOrder() {
+        let rows: [[String: Any]] = [
+            ["title": "Episode 12 - Finale", "thumbnail": "https://images.example.com/12.jpg"],
+            ["title": "Episode 2 – Arrival", "thumbnail": "https://images.example.com/2.jpg"],
+            ["title": "Episode 12.5 - Recap"],
+            ["title": "Season 2 Trailer"],
+            ["title": "Episode 1-2 - Double feature"]
+        ]
+        let result = EpisodeMetadata.merge(rows.compactMap(EpisodeMetadata.streamingEpisode))
+        XCTAssertEqual(result[12]?.title, "Finale")
+        XCTAssertEqual(result[2]?.thumbnail?.lastPathComponent, "2.jpg")
+        XCTAssertNil(result[3])
+        XCTAssertNil(result[1])
+        XCTAssertEqual(result.count, 2)
+    }
+    func testEpisodeTitleFallbackPreservesAvailableThumbnail() {
+        let preview = EpisodeMetadata(number: 5, thumbnail: URL(string: "https://images.example.com/5.jpg"))
+        let title = EpisodeMetadata.jikanEpisode(["mal_id": 5, "title": "A New Beginning"])
+        let result = EpisodeMetadata.merge([preview, title!, EpisodeMetadata(number: 5)])
+        XCTAssertEqual(result[5]?.title, "A New Beginning")
+        XCTAssertEqual(result[5]?.thumbnail, preview.thumbnail)
+        XCTAssertNil(EpisodeMetadata.jikanEpisode(["mal_id": 5.5, "title": "Special"]))
+    }
+    func testOlderSavedAnimeDecodesWithoutMetadataIdentifier() throws {
+        let original = Data(#"{"anilistID":1,"sourceID":"original","title":"Saved title","synopsis":"","genres":[]}"#.utf8)
+        let anime = try JSONDecoder().decode(Anime.self, from: original)
+        XCTAssertEqual(anime.id, "anilist:1")
+        XCTAssertNil(anime.malID)
+    }
     func testCanonicalIdentityDoesNotDependOnProviderURL() {
         let first = Anime(anilistID: 151807, sourceID: "old-slug", title: "Example")
         let changed = Anime(anilistID: 151807, sourceID: "new-slug", title: "Localized title")

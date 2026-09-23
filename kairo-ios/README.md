@@ -17,7 +17,8 @@ The Python project generator is only for maintainers; you do not need to run it 
 ## Implemented paths
 
 - Settings → Appearance offers System, Light and Dark modes. The choice takes effect immediately and persists between launches without changing existing library/history data.
-- Preview artwork fits inside its frame without cropping. Trending artwork and title/actions occupy separate areas so text does not cover the image; a soft backdrop fills unused space around differing image proportions.
+- Preview artwork fills its bounds. Wide banner frames reduce cropping, and portrait-only headers use a complete poster over a blurred full-bleed backdrop. Trending titles/actions remain below the artwork.
+- Episode rows show names and thumbnails when available: AniList streaming episode metadata supplies matched previews, and Jikan/MyAnimeList supplies additional titles. Matching uses exact catalog IDs and explicit episode numbers, never array positions. Missing previews show a neutral placeholder. Long series use 100-episode ranges with cached, rate-spaced metadata requests; metadata failures do not block playback.
 - Top-10 AniList trending fetch, artwork, cached trending data with last-update time, six-second rotation and manual navigation. Automatic motion is disabled for Reduce Motion and VoiceOver.
 - Animex search using its documented-in-module GraphQL contract; exact AniList ID matching for trending titles, avoiding guessed source slugs.
 - Episode provider lookup with Sub/Dub selection and visible HTTP/API errors. Only HTTPS HLS/MP4 media links are accepted; HTML embeds are not presented as video files.

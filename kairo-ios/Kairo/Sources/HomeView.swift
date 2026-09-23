@@ -60,13 +60,14 @@ struct TrendingCarousel: View {
     @State private var index = 0
     @State private var paused = false
     @State private var visible = true
+    @State private var cardWidth: CGFloat = 350
     private var rotate: Bool { !paused && !reduceMotion && !voiceOver && visible && scenePhase == .active && items.count > 1 }
     var body: some View {
         VStack(spacing: 0) {
             TabView(selection: $index) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { rank, anime in
                     VStack(spacing: 0) {
-                        Artwork(url: anime.banner ?? anime.cover).frame(height: 190)
+                        AnimeArtwork(anime: anime).frame(height: cardWidth / 2.8)
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
                                 Text("TRENDING ANIME").font(.caption.weight(.semibold)).tracking(1.5)
@@ -85,7 +86,13 @@ struct TrendingCarousel: View {
                         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
                     }.background(Theme.surface).tag(rank)
                 }
-            }.tabViewStyle(.page(indexDisplayMode: .never)).frame(height: 410)
+            }.tabViewStyle(.page(indexDisplayMode: .never)).frame(height: cardWidth / 2.8 + 220)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.onAppear { cardWidth = geometry.size.width }
+                            .onChange(of: geometry.size.width) { _, width in cardWidth = width }
+                    }
+                }
                 .simultaneousGesture(DragGesture(minimumDistance: 15).onChanged { _ in paused = true })
             HStack {
                 Button { paused = true; move(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("Previous trending anime")

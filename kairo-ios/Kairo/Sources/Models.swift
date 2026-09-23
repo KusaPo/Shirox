@@ -8,6 +8,7 @@ enum AudioChoice: String, Codable, CaseIterable, Identifiable {
 
 struct Anime: Codable, Identifiable, Hashable {
     var anilistID: Int?
+    var malID: Int?
     var sourceID: String?
     var title: String
     var alternateTitle: String?
