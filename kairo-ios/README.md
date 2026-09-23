@@ -32,6 +32,7 @@ To make the same IPA on a Mac with Xcode installed, run `bash kairo-ios/scripts/
 - Discover opens with titles from the selected browse source (Animex catalog or AniList popular feed). Switch the source in Discover's top-left menu or Sources & preferences. Searching follows the same choice. Playback still resolves through Animex; selecting AniList changes discovery, not the stream provider. Animex search uses its documented-in-module GraphQL contract and exact AniList ID matching for trending titles.
 - Episode provider lookup with Sub/Dub selection and visible HTTP/API errors. Only HTTPS HLS/MP4 media links are accepted; HTML embeds are not presented as video files.
 - Full-screen native AVPlayerViewController opens with a black loading screen and no intermediate navigation bar, plus supported system audio/subtitle controls, progress persistence, resume and saved-title library.
+- Player settings offer auto-play of the next known episode (off by default), preferring a ready offline copy and otherwise the current audio language/provider. AniSkip intro/recap timestamps show a Skip button or auto-skip when enabled; missing timestamps simply leave normal playback. Both preferences persist.
 - Single or next-three episode downloads, two concurrent transfers, queue/pause/retry/remove, separate Wi-Fi/cellular background sessions, restored task records, local offline playback, and file deletion that preserves history.
 - HLS downloads use Apple's current AVAssetDownloadConfiguration API. Preparation checks whether the asset is playable, protected, and has a finite duration; failures include the native error domain/code when available. Embedded English subtitles are selected when offered. Direct video downloads use background URLSession transfers. Readiness includes a local playable-media check.
 - Source-link manifest inspection. It does **not** execute arbitrary imported JavaScript.
@@ -39,7 +40,7 @@ To make the same IPA on a Mac with Xcode installed, run `bash kairo-ios/scripts/
 ## Explicitly unfinished
 
 - Additional community-module runtimes and a second verified catalog provider. Importing a library link does not install an operational provider yet.
-- Exact per-resolution selection, external subtitle file downloads, configurable autoplay-next, multi-season mapping, optional account sync, and background PiP lifecycle polish.
+- Exact per-resolution selection, external subtitle file downloads, multi-season mapping, optional account sync, and background PiP lifecycle polish.
 - Live video decoding, actual offline audio/subtitle availability, background completion, interrupted-URL recovery, and device accessibility have not been verified merely by compiling this project.
 - Provider request headers use AVURLAsset's widely used `AVURLAssetHTTPHeaderFieldsKey` option, whose portability must be tested. A provider requiring an unsupported transport may need a different integration.
 - Retrying an interrupted transfer with no surviving OS task resolves a fresh media link and starts again; it does not promise byte-level resume across changed URLs.

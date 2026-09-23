@@ -9,10 +9,42 @@ struct PlaybackRequest: Identifiable {
     var localURL: URL?
 }
 
+struct SkipInterval {
+    let start: Double
+    let end: Double
+    let label: String
+}
+
+actor SkipTimeAPI {
+    static let shared = SkipTimeAPI()
+    func intervals(malID: Int, episode: Int, duration: Double) async -> [SkipInterval] {
+        guard malID > 0, episode > 0, duration.isFinite, duration > 0,
+              let url = URL(string: "https://api.aniskip.com/v2/skip-times/\(malID)/\(episode)?types=op&types=recap&episodeLength=\(Int(duration))") else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = json["results"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let type = row["skipType"] as? String, ["op", "mixed-op", "recap"].contains(type),
+                  let interval = row["interval"] as? [String: Any],
+                  let start = (interval["startTime"] as? NSNumber)?.doubleValue,
+                  let end = (interval["endTime"] as? NSNumber)?.doubleValue,
+                  start >= 0, end > start, end <= duration + 10 else { return nil }
+            return SkipInterval(start: start, end: min(end, duration), label: type == "recap" ? "Skip recap" : "Skip intro")
+        }
+    }
+}
+
 final class PlaybackController: ObservableObject {
     let player = AVPlayer()
     @Published var error: String?
     @Published var isPreparing = true
+    @Published var skipPrompt: SkipInterval?
+    var autoSkip = false
+    private var intervals: [SkipInterval] = []
+    private var skipped = Set<Int>()
     private var observation: NSKeyValueObservation?
     private var timeToken: Any?
     private var active: PlaybackRequest?
@@ -21,6 +53,11 @@ final class PlaybackController: ObservableObject {
     @MainActor func open(_ request: PlaybackRequest, store: AppStore) async {
         isPreparing = true
         error = nil
+        skipPrompt = nil
+        intervals = []
+        skipped = []
+        if let timeToken { player.removeTimeObserver(timeToken); self.timeToken = nil }
+        observation = nil
         active = request
         self.store = store
         do {
@@ -43,11 +80,54 @@ final class PlaybackController: ObservableObject {
                 await player.seek(to: CMTime(seconds: progress.seconds, preferredTimescale: 600))
             }
             try Task.checkCancellation()
-            timeToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main) { [weak self] _ in self?.saveProgress() }
+            timeToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { [weak self] _ in
+                self?.saveProgress()
+                self?.checkSkip()
+            }
             player.play()
             isPreparing = false
+            if let malID = request.anime.malID {
+                let duration = try? await asset.load(.duration)
+                let intervals = await SkipTimeAPI.shared.intervals(malID: malID, episode: request.episode, duration: duration?.seconds ?? .nan)
+                if !Task.isCancelled, active?.id == request.id { self.intervals = intervals }
+            }
         } catch is CancellationError { }
         catch { self.error = error.localizedDescription; isPreparing = false }
+    }
+
+    private func checkSkip() {
+        let seconds = player.currentTime().seconds
+        guard seconds.isFinite else { return }
+        skipPrompt = nil
+        for (index, interval) in intervals.enumerated() where !skipped.contains(index) && seconds >= interval.start && seconds < interval.end - 1 {
+            if autoSkip { skipped.insert(index); player.seek(to: CMTime(seconds: interval.end, preferredTimescale: 600)) }
+            else { skipPrompt = interval }
+            break
+        }
+    }
+    func skipNow() {
+        guard let interval = skipPrompt else { return }
+        if let index = intervals.firstIndex(where: { $0.start == interval.start }) { skipped.insert(index) }
+        skipPrompt = nil
+        player.seek(to: CMTime(seconds: interval.end, preferredTimescale: 600))
+    }
+    @MainActor func playNext(after request: PlaybackRequest, store: AppStore) async {
+        let episode = request.episode + 1
+        guard request.anime.episodeCount.map({ episode <= $0 }) ?? false else { return }
+        isPreparing = true
+        do {
+            if let local = store.state.downloads.first(where: {
+                $0.anime.id == request.anime.id && $0.episode == episode && $0.state == .ready
+            })?.localURL {
+                await open(PlaybackRequest(anime: request.anime, episode: episode, stream: nil, localURL: local), store: store)
+            } else {
+                let options = try await CatalogAPI.shared.streams(request.anime, episode: episode, audio: request.stream?.audio ?? .sub)
+                guard let choice = options.first(where: { $0.provider == request.stream?.provider }) ?? options.first else {
+                    throw KairoError.message("The next episode has no playable stream.")
+                }
+                await open(PlaybackRequest(anime: request.anime, episode: episode, stream: choice), store: store)
+            }
+        } catch { error = "Couldn't start episode \(episode): \(error.localizedDescription)"; isPreparing = false }
     }
 
     func saveProgress(finished: Bool = false) {
@@ -81,6 +161,9 @@ struct PlayerScreen: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = PlaybackController()
+    @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
+    @AppStorage("playerAutoSkipIntro") private var autoSkipIntro = false
+    @State private var currentRequest: PlaybackRequest?
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -88,6 +171,9 @@ struct PlayerScreen: View {
             if controller.isPreparing {
                 Color.black.ignoresSafeArea()
                 ProgressView("Preparing episode…").tint(.white).foregroundStyle(.white)
+            }
+            if let prompt = controller.skipPrompt, !controller.isPreparing {
+                VStack { Spacer(); HStack { Spacer(); Button(prompt.label) { controller.skipNow() }.buttonStyle(.borderedProminent).padding(24) } }
             }
             if let error = controller.error {
                 VStack(spacing: 16) {
@@ -97,21 +183,36 @@ struct PlayerScreen: View {
                 }.padding(28).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22)).padding()
             }
         }
-        .overlay(alignment: .topLeading) {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.subheadline.bold())
-                    .frame(width: 38, height: 38)
-                    .background(.black.opacity(0.65), in: Circle())
+        .overlay(alignment: .top) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.subheadline.bold())
+                        .frame(width: 38, height: 38)
+                        .background(.black.opacity(0.65), in: Circle())
+                }.accessibilityLabel("Close player")
+                Spacer()
+                Menu {
+                    Toggle("Auto-play next episode", isOn: $autoPlayNext)
+                    Toggle("Auto-skip intro and recap", isOn: $autoSkipIntro)
+                } label: {
+                    Image(systemName: "gearshape.fill").font(.subheadline.bold())
+                        .frame(width: 38, height: 38)
+                        .background(.black.opacity(0.65), in: Circle())
+                }.accessibilityLabel("Playback settings")
             }
             .foregroundStyle(.white)
-            .accessibilityLabel("Close player")
             .padding()
         }
-        .task { await controller.open(request, store: store) }
+        .task { currentRequest = request; controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
+        .onChange(of: autoSkipIntro) { _, enabled in controller.autoSkip = enabled }
         .onDisappear { controller.stop() }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
             guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
             controller.saveProgress(finished: true)
+            if autoPlayNext, let currentRequest {
+                Task { await controller.playNext(after: currentRequest, store: store) }
+                self.currentRequest = PlaybackRequest(anime: currentRequest.anime, episode: currentRequest.episode + 1, stream: nil)
+            }
         }
     }
 }
