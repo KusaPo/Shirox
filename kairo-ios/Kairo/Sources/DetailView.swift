@@ -76,7 +76,7 @@ struct AnimeDetailView: View {
                         Stepper("Episode \(customEpisode)", value: $customEpisode, in: 1...5000)
                         episodeRow(customEpisode)
                     }
-                } header: { Text("Episodes") } footer: { Text("Episode names come from AniList and MyAnimeList when available. Kairo tries to capture a frame from each episode stream for missing previews; some HLS streams do not allow this. Stream availability can differ by language.") }
+                } header: { Text("Episodes") } footer: { Text("Episode previews come from episode-specific artwork or a frame captured from that episode. Streams that block frame capture show an episode placeholder. Titles come from AniList and MyAnimeList when available.") }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -137,7 +137,6 @@ struct AnimeDetailView: View {
             Button { action = EpisodeAction(episode: episode, download: false) } label: {
                 HStack(spacing: 12) {
                     EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail,
-                                     fallback: title.banner ?? title.cover,
                                      anime: title, episode: episode,
                                      localURL: store.state.downloads.first(where: {
                                          $0.anime.id == title.id && $0.episode == episode && $0.state == .ready
@@ -164,7 +163,6 @@ struct AnimeDetailView: View {
 
 struct EpisodeThumbnail: View {
     let url: URL?
-    let fallback: URL?
     let anime: Anime
     let episode: Int
     let localURL: URL?
@@ -181,8 +179,13 @@ struct EpisodeThumbnail: View {
                         image.resizable().scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height).clipped()
                     } else {
-                        Artwork(url: fallback)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
+                        ZStack {
+                            LinearGradient(colors: [.black.opacity(0.8), Theme.purple.opacity(0.42)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            VStack(spacing: 2) {
+                                Image(systemName: "play.rectangle").font(.caption)
+                                Text("EP \(episode)").font(.caption2.bold())
+                            }.foregroundStyle(.white.opacity(0.8))
+                        }.frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
             }
@@ -208,13 +211,13 @@ actor EpisodePreviewService {
     static let shared = EpisodePreviewService()
     private var active = 0
     private var waiting: [CheckedContinuation<Void, Never>] = []
-    private var attempted = Set<String>()
+    private var attempted: [String: Date] = [:]
     private let frames = NSCache<NSString, UIImage>()
 
     func frame(anime: Anime, episode: Int, localURL: URL?) async -> UIImage? {
-        let key = "\(anime.id)-\(episode)" as NSString
+        let key = "\(anime.id)-\(episode)-\(localURL?.path ?? "remote")" as NSString
         if let cached = frames.object(forKey: key) { return cached }
-        if attempted.contains(key as String) { return nil }
+        if let last = attempted[key as String], Date().timeIntervalSince(last) < 600 { return nil }
         if active >= 2 {
             await withCheckedContinuation { waiting.append($0) }
         } else { active += 1 }
@@ -223,8 +226,9 @@ actor EpisodePreviewService {
             else { waiting.removeFirst().resume() }
         }
         if let cached = frames.object(forKey: key) { return cached }
-        if attempted.contains(key as String) || Task.isCancelled { return nil }
-        attempted.insert(key as String)
+        if let last = attempted[key as String], Date().timeIntervalSince(last) < 600 { return nil }
+        if Task.isCancelled { return nil }
+        attempted[key as String] = Date()
         do {
             let stream: StreamOption?
             if localURL == nil {
@@ -233,15 +237,21 @@ actor EpisodePreviewService {
             guard let media = localURL ?? stream?.url else { return nil }
             let headers = stream?.headers ?? [:]
             let asset = AVURLAsset(url: media, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
-            let duration = try await asset.load(.duration)
-            guard duration.seconds.isFinite, duration.seconds > 2 else { return nil }
+            let duration = try? await asset.load(.duration)
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 480, height: 270)
-            let still = try await generator.image(at: CMTime(seconds: duration.seconds / 2, preferredTimescale: 600))
-            let image = UIImage(cgImage: still.image)
-            frames.setObject(image, forKey: key)
-            return image
+            let midpoint = duration?.seconds.isFinite == true && (duration?.seconds ?? 0) > 2
+                ? (duration?.seconds ?? 0) / 2 : 600
+            for second in [midpoint, min(120, midpoint)] where second > 1 {
+                if Task.isCancelled { return nil }
+                if let still = try? await generator.image(at: CMTime(seconds: second, preferredTimescale: 600)) {
+                    let image = UIImage(cgImage: still.image)
+                    frames.setObject(image, forKey: key)
+                    return image
+                }
+            }
+            return nil
         } catch { return nil }
     }
 }

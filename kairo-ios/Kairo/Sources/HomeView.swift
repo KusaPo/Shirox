@@ -125,32 +125,83 @@ struct DiscoverView: View {
     @EnvironmentObject private var store: AppStore
     @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
     @State private var query = ""
-    @State private var results: [Anime] = []
-    @State private var featured: [Anime] = []
+    @State private var items: [Anime] = []
+    @State private var order: DiscoverOrder = .popular
+    @State private var genre = "All"
+    @State private var page = 1
+    @State private var hasMore = false
     @State private var busy = false
-    @State private var featuredBusy = false
     @State private var error: String?
-    @State private var featuredError: String?
+    @State private var note: String?
+    @State private var generation = UUID()
     @State private var refresh = UUID()
+    private let genres = ["All", "Action", "Adventure", "Comedy", "Drama", "Fantasy", "Mystery", "Romance", "Sci-Fi", "Slice of Life", "Sports"]
     private var source: DiscoverySource { DiscoverySource(rawValue: discoverySource) ?? .animex }
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var displayed: [Anime] {
+        guard searching else { return items }
+        let matches = genre == "All" ? items : items.filter { $0.genres.contains(genre) }
+        switch order {
+        case .popular: return matches
+        case .trending: return matches.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+        case .rated: return matches
+        }
+    }
     var body: some View {
-        List {
+        ScrollView {
             if source == .animex && !store.state.preferences.animexEnabled {
-                Text("Enable Animex in Sources & preferences to browse its catalog.")
-            } else if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Section {
-                    Text(source == .animex ? "Titles from the Animex catalog" : "Popular titles on AniList · Playback uses Animex when a match exists")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if featuredBusy { ProgressView("Loading \(source.name)…") }
-                    else if let featuredError { ProblemView(message: featuredError) { refresh = UUID() } }
-                    else if featured.isEmpty { ContentUnavailableView("No titles available", systemImage: "sparkles.tv", description: Text("Pull to refresh or select another source.")) }
-                    ForEach(featured) { anime in NavigationLink { AnimeDetailView(anime: anime) } label: { AnimeRow(anime: anime) } }
-                } header: { Text(source.browseTitle) }
+                ContentUnavailableView("Animex is disabled", systemImage: "square.stack.3d.up", description: Text("Enable it in Sources & preferences to browse or watch."))
             } else {
-                if busy { ProgressView("Searching \(source.name)…") }
-                else if let error { ProblemView(message: error) { refresh = UUID() } }
-                else if results.isEmpty { ContentUnavailableView.search(text: query) }
-                ForEach(results) { anime in NavigationLink { AnimeDetailView(anime: anime) } label: { AnimeRow(anime: anime) } }
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text(searching ? "Search results" : source.browseTitle).font(.title2.bold())
+                        Spacer()
+                        Text("\(displayed.count) titles").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            Menu {
+                                Picker("Sort", selection: $order) {
+                                    ForEach(DiscoverOrder.allCases) { option in Text(option.name).tag(option) }
+                                }
+                            } label: { Label(order.name, systemImage: "arrow.up.arrow.down") }
+                            Menu {
+                                Picker("Genre", selection: $genre) {
+                                    ForEach(genres, id: \.self) { value in Text(value).tag(value) }
+                                }
+                            } label: { Label(genre == "All" ? "All genres" : genre, systemImage: "line.3.horizontal.decrease") }
+                        }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                    if let note, !searching { Text(note).font(.caption).foregroundStyle(.secondary) }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 12)], spacing: 20) {
+                        ForEach(displayed) { anime in
+                            NavigationLink { AnimeDetailView(anime: anime) } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Artwork(url: anime.cover).aspectRatio(2.0 / 3.0, contentMode: .fit)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    Text(anime.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(anime.genres.first ?? "Anime").font(.caption2).foregroundStyle(.secondary)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.plain)
+                            .onAppear {
+                                if anime.id == displayed.last?.id, hasMore, !busy {
+                                    let current = generation
+                                    Task { await loadMore(current) }
+                                }
+                            }
+                        }
+                    }
+                    if busy { ProgressView("Loading more…").frame(maxWidth: .infinity).padding() }
+                    if hasMore && !busy && displayed.isEmpty {
+                        Button("Load more titles") { let current = generation; Task { await loadMore(current) } }
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let error { ProblemView(message: error) { if items.isEmpty { refresh = UUID() } else { let current = generation; Task { await loadMore(current) } } } }
+                    if !busy && items.isEmpty && error == nil {
+                        ContentUnavailableView(searching ? "No search results" : "No matching titles", systemImage: "magnifyingglass", description: Text("Try another genre or source."))
+                    }
+                }.padding(16)
             }
         }
         .navigationTitle("Discover").searchable(text: $query, prompt: "Search \(source.name)")
@@ -160,36 +211,39 @@ struct DiscoverView: View {
                     Picker("Browse source", selection: $discoverySource) {
                         ForEach(DiscoverySource.allCases) { source in Text(source.name).tag(source.rawValue) }
                     }
-                } label: { Label(source.name, systemImage: "square.stack.3d.up") }
+                } label: { HStack(spacing: 3) { Text(source.name); Image(systemName: "chevron.down").font(.caption2) }.font(.subheadline.weight(.semibold)) }
                     .accessibilityLabel("Browse source: \(source.name)")
             }
             SourceToolbar()
         }
         .refreshable { refresh = UUID() }
-        .task(id: "\(discoverySource)|\(refresh)|\(store.state.preferences.animexEnabled)") {
-            featured = []; featuredError = nil; featuredBusy = false
+        .task(id: "\(query)|\(discoverySource)|\(order.rawValue)|\(genre)|\(refresh)|\(store.state.preferences.animexEnabled)") {
+            generation = UUID(); let current = generation
+            items = []; error = nil; note = nil; page = 1; hasMore = false; busy = false
             guard source != .animex || store.state.preferences.animexEnabled else { return }
-            featuredBusy = true
-            do {
-                let items = try await CatalogAPI.shared.discover(source)
-                try Task.checkCancellation()
-                featured = items
-            } catch is CancellationError { }
-            catch { if !Task.isCancelled { featuredError = error.localizedDescription } }
-            featuredBusy = false
+            if searching { try? await Task.sleep(for: .milliseconds(350)) }
+            guard !Task.isCancelled else { return }
+            await loadMore(current)
         }
-        .task(id: query + refresh.uuidString + discoverySource + String(store.state.preferences.animexEnabled)) {
-            results = []; error = nil; busy = false
-            let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty, (source != .animex || store.state.preferences.animexEnabled) else { return }
-            do {
-                try await Task.sleep(for: .milliseconds(400))
-                busy = true
-                let found = try await CatalogAPI.shared.search(text, source: source)
-                try Task.checkCancellation()
-                results = found; busy = false
-            } catch is CancellationError { }
-            catch { if !Task.isCancelled { self.error = error.localizedDescription; busy = false } }
-        }
+    }
+
+    private func loadMore(_ current: UUID) async {
+        guard current == generation, !busy else { return }
+        busy = true; error = nil
+        let next = page
+        do {
+            if searching {
+                let found = try await CatalogAPI.shared.search(query.trimmingCharacters(in: .whitespacesAndNewlines), source: source)
+                guard current == generation, !Task.isCancelled else { return }
+                items = found; hasMore = false
+            } else {
+                let result = try await CatalogAPI.shared.discover(source, page: next, order: order, genre: genre)
+                guard current == generation, !Task.isCancelled else { return }
+                let existing = Set(items.map(\.id))
+                items += result.anime.filter { !existing.contains($0.id) }
+                hasMore = result.hasMore; note = result.note; page = next + 1
+            }
+        } catch { if current == generation && !Task.isCancelled { self.error = error.localizedDescription } }
+        if current == generation { busy = false }
     }
 }

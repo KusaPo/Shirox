@@ -7,6 +7,20 @@ enum DiscoverySource: String, CaseIterable, Identifiable {
     var browseTitle: String { self == .animex ? "Explore Animex" : "Popular on AniList" }
 }
 
+enum DiscoverOrder: String, CaseIterable, Identifiable {
+    case popular = "POPULARITY_DESC", trending = "TRENDING_DESC", rated = "SCORE_DESC"
+    var id: String { rawValue }
+    var name: String {
+        switch self { case .popular: "Popular"; case .trending: "Trending"; case .rated: "Top rated" }
+    }
+}
+
+struct DiscoverPage {
+    var anime: [Anime]
+    var hasMore: Bool
+    var note: String? = nil
+}
+
 actor CatalogAPI {
     static let shared = CatalogAPI()
     private let session: URLSession
@@ -48,30 +62,48 @@ actor CatalogAPI {
         return items.compactMap(Self.anilistAnime)
     }
 
-    func discover(_ source: DiscoverySource) async throws -> [Anime] {
+    func discover(_ source: DiscoverySource, page: Int, order: DiscoverOrder, genre: String) async throws -> DiscoverPage {
         switch source {
         case .animex:
-            // An empty catalog query lists source titles; no guessed media links.
-            let query = """
-            { catalogAnime(filter:{query:""},limit:24) {
-              items { id anilistId malId titleRomaji titleEnglish coverImage bannerImage episodeCount seasonYear genres }
-            } }
-            """
-            let json = try await request(URL(string: "https://graphql.animex.one/graphql")!, body: ["query": query])
-            guard let data = json["data"] as? [String: Any], let catalog = data["catalogAnime"] as? [String: Any],
-                  let items = catalog["items"] as? [[String: Any]] else { throw KairoError.message("Animex browse data is unavailable. You can still search, or switch to AniList.") }
-            return items.compactMap(Self.animexAnime)
+            // Animex exposes search, but no verified page cursor or recommendation
+            // feed. Vary search terms to browse samples and keep full-title search.
+            let seeds = ["an", "no", "ka", "to", "mi", "sa", "ko", "shi", "ra", "ki", "ma", "re", "ha", "yu", "ta", "mo", "se", "na", "da", "fu", "ri", "chi", "su", "ai"]
+            let index = (max(1, page) - 1) * 2
+            guard index < seeds.count else { return DiscoverPage(anime: [], hasMore: false) }
+            do {
+                var found: [Anime] = []
+                for seed in seeds[index..<min(index + 2, seeds.count)] {
+                    found += try await search(seed)
+                }
+                let filtered = genre == "All" ? found : found.filter { $0.genres.contains(genre) }
+                let unique = Array(Dictionary(grouping: filtered, by: \.id).values.compactMap(\.first))
+                let sorted: [Anime]
+                switch order {
+                case .popular: sorted = unique.sorted { $0.title < $1.title }
+                case .trending: sorted = unique.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+                case .rated: sorted = unique.sorted { $0.title < $1.title }
+                }
+                return DiscoverPage(anime: sorted, hasMore: index + 2 < seeds.count,
+                                    note: "Animex provides title search, not a complete paginated browse feed. These are catalog samples; search to find a specific show.")
+            } catch {
+                var fallback = try await discover(.anilist, page: page, order: order, genre: genre)
+                fallback.note = "Animex catalog browse is unavailable. Showing AniList titles; Kairo checks Animex for episodes when you open one."
+                return fallback
+            }
         case .anilist:
             let query = """
-            { Page(page:1,perPage:24) { media(type:ANIME,sort:POPULARITY_DESC,isAdult:false) {
+            query Browse($page:Int,$sort:[MediaSort],$genre:String) {
+              Page(page:$page,perPage:30) { pageInfo { hasNextPage } media(type:ANIME,sort:$sort,genre:$genre,isAdult:false) {
               id idMal title { english romaji } coverImage { extraLarge large } bannerImage description episodes
               nextAiringEpisode { episode } seasonYear genres
             } } }
             """
-            let json = try await request(URL(string: "https://graphql.anilist.co")!, body: ["query": query])
+            let json = try await request(URL(string: "https://graphql.anilist.co")!, body: ["query": query,
+                "variables": ["page": max(1, page), "sort": [order.rawValue], "genre": genre == "All" ? NSNull() as Any : genre as Any]])
             guard let data = json["data"] as? [String: Any], let page = data["Page"] as? [String: Any],
                   let items = page["media"] as? [[String: Any]] else { throw KairoError.message("AniList browse data is unavailable.") }
-            return items.compactMap(Self.anilistAnime)
+            let info = page["pageInfo"] as? [String: Any]
+            return DiscoverPage(anime: items.compactMap(Self.anilistAnime), hasMore: info?["hasNextPage"] as? Bool ?? false)
         }
     }
 
