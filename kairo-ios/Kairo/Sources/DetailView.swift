@@ -232,7 +232,10 @@ actor EpisodePreviewService {
         do {
             let stream: StreamOption?
             if localURL == nil {
-                stream = try await CatalogAPI.shared.streams(anime, episode: episode, audio: .sub).first
+                let options = try await CatalogAPI.shared.streams(anime, episode: episode, audio: .sub)
+                // A direct video is more likely to support a frame at the
+                // midpoint than an HLS playlist without I-frame entries.
+                stream = options.first(where: { !$0.isHLS }) ?? options.first
             } else { stream = nil }
             guard let media = localURL ?? stream?.url else { return nil }
             let headers = stream?.headers ?? [:]
