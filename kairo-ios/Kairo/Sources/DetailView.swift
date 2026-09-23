@@ -76,7 +76,7 @@ struct AnimeDetailView: View {
                         Stepper("Episode \(customEpisode)", value: $customEpisode, in: 1...5000)
                         episodeRow(customEpisode)
                     }
-                } header: { Text("Episodes") } footer: { Text("Episode names come from AniList and MyAnimeList when available. Missing images use the show artwork; downloaded episodes may show a frame from the middle. Stream availability can differ by language.") }
+                } header: { Text("Episodes") } footer: { Text("Episode names come from AniList and MyAnimeList when available. Kairo tries to capture a frame from each episode stream for missing previews; some HLS streams do not allow this. Stream availability can differ by language.") }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -138,6 +138,7 @@ struct AnimeDetailView: View {
                 HStack(spacing: 12) {
                     EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail,
                                      fallback: title.banner ?? title.cover,
+                                     anime: title, episode: episode,
                                      localURL: store.state.downloads.first(where: {
                                          $0.anime.id == title.id && $0.episode == episode && $0.state == .ready
                                      })?.localURL)
@@ -164,6 +165,8 @@ struct AnimeDetailView: View {
 struct EpisodeThumbnail: View {
     let url: URL?
     let fallback: URL?
+    let anime: Anime
+    let episode: Int
     let localURL: URL?
     @State private var capturedFrame: UIImage?
     private static let frames = NSCache<NSString, UIImage>()
@@ -184,26 +187,62 @@ struct EpisodeThumbnail: View {
                 }
             }
         }
-        .task(id: localURL?.path) {
+        .task(id: "\(anime.id)|\(episode)|\(url?.absoluteString ?? "")|\(localURL?.path ?? "")") {
             capturedFrame = nil
-            guard url == nil, let localURL else { return }
-            if let cached = Self.frames.object(forKey: localURL.path as NSString) {
+            guard url == nil else { return }
+            let key = "\(anime.id)-\(episode)" as NSString
+            if let cached = Self.frames.object(forKey: key) {
                 capturedFrame = cached; return
             }
-            // HLS packages without an I-frame playlist cannot always yield a
-            // still. The show image remains visible if AVFoundation declines.
-            let asset = AVURLAsset(url: localURL)
-            guard let duration = try? await asset.load(.duration), duration.seconds.isFinite,
-                  duration.seconds > 2, !Task.isCancelled else { return }
+            if let image = await EpisodePreviewService.shared.frame(anime: anime, episode: episode, localURL: localURL), !Task.isCancelled {
+                Self.frames.setObject(image, forKey: key)
+                capturedFrame = image
+            }
+        }.accessibilityHidden(true)
+    }
+}
+
+// Resolve a source only for rows needing a preview, with two requests at once.
+// Stream links may expire, so cache frames rather than links.
+actor EpisodePreviewService {
+    static let shared = EpisodePreviewService()
+    private var active = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var attempted = Set<String>()
+    private let frames = NSCache<NSString, UIImage>()
+
+    func frame(anime: Anime, episode: Int, localURL: URL?) async -> UIImage? {
+        let key = "\(anime.id)-\(episode)" as NSString
+        if let cached = frames.object(forKey: key) { return cached }
+        if attempted.contains(key as String) { return nil }
+        if active >= 2 {
+            await withCheckedContinuation { waiting.append($0) }
+        } else { active += 1 }
+        defer {
+            if waiting.isEmpty { active -= 1 }
+            else { waiting.removeFirst().resume() }
+        }
+        if let cached = frames.object(forKey: key) { return cached }
+        if attempted.contains(key as String) || Task.isCancelled { return nil }
+        attempted.insert(key as String)
+        do {
+            let stream: StreamOption?
+            if localURL == nil {
+                stream = try await CatalogAPI.shared.streams(anime, episode: episode, audio: .sub).first
+            } else { stream = nil }
+            guard let media = localURL ?? stream?.url else { return nil }
+            let headers = stream?.headers ?? [:]
+            let asset = AVURLAsset(url: media, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
+            let duration = try await asset.load(.duration)
+            guard duration.seconds.isFinite, duration.seconds > 2 else { return nil }
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 480, height: 270)
-            guard let frame = try? await generator.image(at: CMTime(seconds: duration.seconds / 2, preferredTimescale: 600)),
-                  !Task.isCancelled else { return }
-            let image = UIImage(cgImage: frame.image)
-            Self.frames.setObject(image, forKey: localURL.path as NSString)
-            capturedFrame = image
-        }.accessibilityHidden(true)
+            let still = try await generator.image(at: CMTime(seconds: duration.seconds / 2, preferredTimescale: 600))
+            let image = UIImage(cgImage: still.image)
+            frames.setObject(image, forKey: key)
+            return image
+        } catch { return nil }
     }
 }
 
