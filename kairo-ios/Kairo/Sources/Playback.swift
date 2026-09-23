@@ -127,7 +127,7 @@ final class PlaybackController: ObservableObject {
                 }
                 await open(PlaybackRequest(anime: request.anime, episode: episode, stream: choice), store: store)
             }
-        } catch { error = "Couldn't start episode \(episode): \(error.localizedDescription)"; isPreparing = false }
+        } catch { self.error = "Couldn't start episode \(episode): \(error.localizedDescription)"; isPreparing = false }
     }
 
     func saveProgress(finished: Bool = false) {
