@@ -47,7 +47,7 @@ To make the same IPA on a Mac with Xcode installed, run `bash kairo-ios/scripts/
 
 ## Device acceptance checklist
 
-Downloaded HLS packages stay at the location supplied by iOS. Kairo resolves filesystem aliases before recording a container-relative path, so `/var` and `/private/var` forms do not cause a false storage error. Packages are used from Downloads inside Kairo; they are not exported as regular videos to Files or Photos. Earlier builds did not retain the path when this check failed, so those queue entries may need a fresh download after updating.
+Downloaded HLS packages stay at the location supplied by iOS. Kairo resolves filesystem aliases and the system's `/.nofollow/` path form before recording a container-relative path. Packages are used from Downloads inside Kairo; they are not exported as regular videos to Files or Photos. If a previous build saved a failed HLS location in an interrupted queue item, Kairo checks that package at startup and restores the episode only after confirming it is playable offline. If iOS removed the package or its offline check fails, retry the episode.
 
 1. Search a known title, select the expected episode and language, and try its listed providers. Confirm actual video and audio play; record which provider worked.
 2. Play for 30 seconds, leave, reopen and confirm resume. Finish an episode and verify it is not offered as an unfinished resume point.

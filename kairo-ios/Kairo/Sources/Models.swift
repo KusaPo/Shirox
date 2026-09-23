@@ -67,12 +67,33 @@ struct DownloadRecord: Codable, Identifiable {
 enum LocalDownloadStorage {
     static var root: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
 
-    // iOS can return /private/var/... while the app's home uses /var/....
-    // Resolve both URLs before comparing components; never move an HLS package.
+    // Resolve every existing ancestor, including symlinks before a missing leaf.
+    // Resolving only the final URL misses an escaping link if its child is absent.
+    private static func canonical(_ url: URL) -> URL? {
+        guard url.isFileURL else { return nil }
+        let path = url.standardizedFileURL.path
+        // System-provided asset URLs may use this root marker. Apple's path
+        // semantics make /.nofollow/<path> refer to /<path>.
+        let ordinaryPath = path.hasPrefix("/.nofollow/") ? String(path.dropFirst("/.nofollow".count)) : path
+        let fm = FileManager.default
+        var current = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in URL(fileURLWithPath: ordinaryPath).pathComponents.dropFirst() {
+            current.appendPathComponent(component)
+            if fm.fileExists(atPath: current.path) {
+                current = current.resolvingSymlinksInPath().standardizedFileURL
+            } else if (try? fm.destinationOfSymbolicLink(atPath: current.path)) != nil {
+                // Reject a broken symlink rather than treating it as a safe path.
+                return nil
+            }
+        }
+        return current.standardizedFileURL
+    }
+
+    // Compare canonical components, retaining only a path within this app's
+    // container. HLS packages remain at the location chosen by iOS.
     static func relativePath(for location: URL, within root: URL = LocalDownloadStorage.root) -> String? {
-        guard location.isFileURL, root.isFileURL else { return nil }
-        let base = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        let target = location.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard let base = canonical(root)?.pathComponents,
+              let target = canonical(location)?.pathComponents else { return nil }
         guard target.count > base.count, target.starts(with: base) else { return nil }
         return target.dropFirst(base.count).joined(separator: "/")
     }
@@ -82,7 +103,7 @@ enum LocalDownloadStorage {
               !path.split(separator: "/").contains("..") else { return nil }
         let location = root.appendingPathComponent(path)
         guard relativePath(for: location, within: root) != nil else { return nil }
-        return location.resolvingSymlinksInPath().standardizedFileURL
+        return canonical(location)
     }
 }
 

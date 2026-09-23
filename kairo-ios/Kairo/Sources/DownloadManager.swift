@@ -40,6 +40,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     private var transferErrors: [UUID: String] = [:]
     private var restoring = true
     static let prefix = "net.kusapo.kairo.download."
+    private static let unrecognizedLocation = "Kairo couldn't recognize the saved download location: "
     private static var backgroundCompletions: [String: () -> Void] = [:]
     private static var finishedSessions = Set<String>()
     private static var validations: [String: Int] = [:]
@@ -78,7 +79,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
                     guard remaining == 0 else { return }
                     for id in oldIDs where self.tasks[id] == nil {
                         self.store.updateDownload(id) { item in
-                            if item.state != .queued && item.state != .paused {
+                            if item.state == .resolving || item.state == .downloading {
                                 item.state = .interrupted
                                 item.message = "The transfer stopped. Retry to get a fresh episode link."
                             }
@@ -89,8 +90,36 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
                             self.store.updateDownload(item.id) { $0.state = .interrupted; $0.message = "The saved file is no longer available on this device." }
                         }
                     }
+                    self.recoverMisclassifiedDownloads()
                     self.restoring = false
                     self.pump()
+                }
+            }
+        }
+    }
+
+    private func recoverMisclassifiedDownloads() {
+        for record in store.state.downloads where record.state == .interrupted && record.relativePath == nil {
+            guard let message = record.message, message.hasPrefix(Self.unrecognizedLocation) else { continue }
+            let path = String(message.dropFirst(Self.unrecognizedLocation.count))
+            let original = URL(fileURLWithPath: path)
+            guard original.pathExtension.lowercased() == "movpkg",
+                  let relativePath = LocalDownloadStorage.relativePath(for: original),
+                  let local = LocalDownloadStorage.url(forRelativePath: relativePath),
+                  FileManager.default.fileExists(atPath: local.path) else { continue }
+            store.updateDownload(record.id) { $0.relativePath = relativePath; $0.state = .resolving; $0.message = "Checking saved episode…" }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let asset = AVURLAsset(url: local)
+                    guard try await asset.load(.isPlayable), asset.assetCache?.isPlayableOffline == true else {
+                        throw KairoError.message("The saved episode is not available offline. Retry the download.")
+                    }
+                    guard self.store.state.downloads.contains(where: { $0.id == record.id }) else { return }
+                    self.store.updateDownload(record.id) { $0.state = .ready; $0.fraction = 1; $0.message = nil }
+                } catch {
+                    guard self.store.state.downloads.contains(where: { $0.id == record.id }) else { return }
+                    self.store.updateDownload(record.id) { $0.state = .interrupted; $0.message = error.localizedDescription }
                 }
             }
         }
@@ -243,7 +272,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
         guard let relativePath = LocalDownloadStorage.relativePath(for: url) else {
             // Include the actual local destination so an unexpected system location
             // can be diagnosed instead of incorrectly describing where the file is.
-            transferErrors[id] = "Kairo couldn't recognize the saved download location: \(url.path)"
+            transferErrors[id] = Self.unrecognizedLocation + url.path
             return
         }
         store.updateDownload(id) { $0.relativePath = relativePath }

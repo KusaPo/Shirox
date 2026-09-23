@@ -128,6 +128,8 @@ final class KairoTests: XCTestCase {
         XCTAssertFalse(aliasPackage.path.hasPrefix(container.path + "/"))
         XCTAssertEqual(LocalDownloadStorage.relativePath(for: aliasPackage, within: container), path)
         XCTAssertEqual(LocalDownloadStorage.relativePath(for: package, within: alias), path)
+        let systemLocation = URL(fileURLWithPath: "/.nofollow" + package.path)
+        XCTAssertEqual(LocalDownloadStorage.relativePath(for: systemLocation, within: container), path)
         let restored = try XCTUnwrap(LocalDownloadStorage.url(forRelativePath: path, within: alias))
         XCTAssertTrue(fm.fileExists(atPath: restored.path))
         XCTAssertEqual(restored.path, package.resolvingSymlinksInPath().standardizedFileURL.path)
@@ -145,6 +147,7 @@ final class KairoTests: XCTestCase {
         XCTAssertNil(LocalDownloadStorage.relativePath(for: container, within: container))
         XCTAssertNil(LocalDownloadStorage.relativePath(for: URL(string: "https://example.com/a.movpkg")!, within: container))
         XCTAssertNil(LocalDownloadStorage.url(forRelativePath: "escape/a.movpkg", within: container))
+        XCTAssertNil(LocalDownloadStorage.relativePath(for: container.appendingPathComponent("escape/a.movpkg"), within: container))
         XCTAssertNil(LocalDownloadStorage.url(forRelativePath: "", within: container))
         XCTAssertNil(LocalDownloadStorage.url(forRelativePath: ".", within: container))
     }
