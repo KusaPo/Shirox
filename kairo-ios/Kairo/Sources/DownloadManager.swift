@@ -2,10 +2,39 @@ import Foundation
 import AVFoundation
 import Combine
 
+// Keep AVFoundation's factory result typed. Its private runtime session class
+// need not pass a dynamic downcast after being stored as a plain URLSession.
+struct DownloadSessions {
+    private let wifiHLS: AVAssetDownloadURLSession
+    private let anyHLS: AVAssetDownloadURLSession
+    private let wifiFile: URLSession
+    private let anyFile: URLSession
+
+    init(prefix: String, delegate: (AVAssetDownloadDelegate & URLSessionDownloadDelegate)?) {
+        func configuration(_ kind: String, wifiOnly: Bool) -> URLSessionConfiguration {
+            let config = URLSessionConfiguration.background(withIdentifier: prefix + kind + (wifiOnly ? ".wifi" : ".any"))
+            config.allowsCellularAccess = !wifiOnly
+            config.waitsForConnectivity = true
+            config.isDiscretionary = false
+            config.sessionSendsLaunchEvents = true
+            return config
+        }
+        wifiHLS = AVAssetDownloadURLSession(configuration: configuration("hls", wifiOnly: true), assetDownloadDelegate: delegate, delegateQueue: .main)
+        anyHLS = AVAssetDownloadURLSession(configuration: configuration("hls", wifiOnly: false), assetDownloadDelegate: delegate, delegateQueue: .main)
+        wifiFile = URLSession(configuration: configuration("file", wifiOnly: true), delegate: delegate, delegateQueue: .main)
+        anyFile = URLSession(configuration: configuration("file", wifiOnly: false), delegate: delegate, delegateQueue: .main)
+    }
+
+    func hls(wifiOnly: Bool) -> AVAssetDownloadURLSession { wifiOnly ? wifiHLS : anyHLS }
+    func file(wifiOnly: Bool) -> URLSession { wifiOnly ? wifiFile : anyFile }
+    // Upcasting is only for shared URLSession operations such as restoration.
+    var all: [URLSession] { [wifiHLS, anyHLS, wifiFile, anyFile] }
+}
+
 // Delegate queues are main queues; published state is mutated on the main thread.
 final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate, URLSessionDownloadDelegate {
     private let store: AppStore
-    private var sessions: [String: URLSession] = [:]
+    private lazy var sessions = DownloadSessions(prefix: Self.prefix, delegate: self)
     private var tasks: [UUID: URLSessionTask] = [:]
     private var preparing: [UUID: Task<Void, Never>] = [:]
     private var transferErrors: [UUID: String] = [:]
@@ -29,27 +58,14 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     init(store: AppStore) {
         self.store = store
         super.init()
-        for kind in ["hls", "file"] {
-            for network in ["wifi", "any"] {
-                let key = kind + "." + network
-                let config = URLSessionConfiguration.background(withIdentifier: Self.prefix + key)
-                config.allowsCellularAccess = network == "any"
-                config.waitsForConnectivity = true
-                config.isDiscretionary = false
-                config.sessionSendsLaunchEvents = true
-                let session: URLSession = kind == "hls"
-                    ? AVAssetDownloadURLSession(configuration: config, assetDownloadDelegate: self, delegateQueue: .main)
-                    : URLSession(configuration: config, delegate: self, delegateQueue: .main)
-                sessions[key] = session
-            }
-        }
         restore()
     }
 
     private func restore() {
         let oldIDs = Set(store.state.downloads.filter { $0.state != .ready }.map(\.id))
-        var remaining = sessions.count
-        for session in sessions.values {
+        let allSessions = sessions.all
+        var remaining = allSessions.count
+        for session in allSessions {
             session.getAllTasks { [weak self] restored in
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -113,7 +129,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             guard let stream = options.first(where: { item.provider == nil || $0.provider == item.provider }) else { throw KairoError.message("The selected provider is no longer available. Remove this queue item and select another provider.") }
             try Task.checkCancellation()
             guard store.state.downloads.contains(where: { $0.id == item.id }) else { return }
-            let network = store.state.preferences.wifiOnly ? "wifi" : "any"
+            let wifiOnly = store.state.preferences.wifiOnly
             let task: URLSessionTask
             if stream.isHLS {
                 let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
@@ -141,14 +157,12 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
                     configuration.primaryContentConfiguration.mediaSelections = [preferredSelection]
                 }
                 try Task.checkCancellation()
-                guard let session = sessions["hls." + network] as? AVAssetDownloadURLSession else {
-                    throw KairoError.message("The HLS download session is unavailable. Close and reopen Kairo, then retry.")
-                }
+                let session = sessions.hls(wifiOnly: wifiOnly)
                 task = session.makeAssetDownloadTask(downloadConfiguration: configuration)
             } else {
                 var request = URLRequest(url: stream.url)
                 request.allHTTPHeaderFields = stream.headers
-                guard let session = sessions["file." + network] else { throw KairoError.message("The download session is unavailable.") }
+                let session = sessions.file(wifiOnly: wifiOnly)
                 task = session.downloadTask(with: request)
             }
             task.taskDescription = item.id.uuidString

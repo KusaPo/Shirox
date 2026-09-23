@@ -3,16 +3,27 @@ import AVFoundation
 @testable import Kairo
 
 final class KairoTests: XCTestCase {
-    func testNativeHLSTaskCreationWithoutStartingTransfer() {
-        let settings = URLSessionConfiguration.background(withIdentifier: "net.kusapo.kairo.test-hls." + UUID().uuidString)
-        let session = AVAssetDownloadURLSession(configuration: settings, assetDownloadDelegate: nil, delegateQueue: .main)
-        defer { session.invalidateAndCancel() }
-        let asset = AVURLAsset(url: URL(string: "https://example.com/episode.m3u8")!)
-        let configuration = AVAssetDownloadConfiguration(asset: asset, title: "Task creation test")
-        let task = session.makeAssetDownloadTask(downloadConfiguration: configuration)
-        defer { task.cancel() }
-        XCTAssertEqual(task.state, .suspended)
-        // Never resume: this checks the failing creation boundary, not source availability.
+    func testStoredHLSSessionsCreateTasksForBothNetworkPolicies() {
+        let prefix = "net.kusapo.kairo.test-hls." + UUID().uuidString + "."
+        let sessions = DownloadSessions(prefix: prefix, delegate: nil)
+        defer { sessions.all.forEach { $0.invalidateAndCancel() } }
+        XCTAssertEqual(Set(sessions.all.compactMap { $0.configuration.identifier }),
+                       Set(["hls.wifi", "hls.any", "file.wifi", "file.any"].map { prefix + $0 }))
+        for wifiOnly in [true, false] {
+            // Exercise the production storage/lookup path, not just Apple's factory.
+            let session = sessions.hls(wifiOnly: wifiOnly)
+            XCTAssertEqual(session.configuration.allowsCellularAccess, !wifiOnly)
+            XCTAssertEqual(sessions.file(wifiOnly: wifiOnly).configuration.allowsCellularAccess, !wifiOnly)
+            XCTAssertTrue(session === sessions.hls(wifiOnly: wifiOnly))
+            let erased: URLSession = session
+            print("HLS session runtime: \(type(of: erased)); legacy downcast succeeds: \(erased is AVAssetDownloadURLSession)")
+            let asset = AVURLAsset(url: URL(string: "https://example.com/episode.m3u8")!)
+            let configuration = AVAssetDownloadConfiguration(asset: asset, title: "Stored session test")
+            let task = session.makeAssetDownloadTask(downloadConfiguration: configuration)
+            defer { task.cancel() }
+            XCTAssertEqual(task.state, .suspended)
+        }
+        // Never resume: source downloads and the OS background worker need a device test.
     }
     func testEpisodePreviewsMatchExplicitNumbersNotArrayOrder() {
         let rows: [[String: Any]] = [
