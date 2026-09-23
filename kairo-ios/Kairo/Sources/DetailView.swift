@@ -133,14 +133,19 @@ struct AnimeDetailView: View {
         .alert("Added to Downloads", isPresented: $queued) { Button("OK", role: .cancel) {} } message: { Text("The queue will check the selected provider and prepare your offline file. Existing items are not duplicated.") }
     }
     private func episodeRow(_ episode: Int) -> some View {
-        HStack {
-            Button { action = EpisodeAction(episode: episode, download: false) } label: {
+        let matching = store.state.downloads.filter { $0.anime.id == title.id && $0.episode == episode }
+        let saved = matching.first(where: { $0.state == .ready && $0.localURL != nil })
+        let pending = matching.first(where: { $0.state != .ready })
+        return HStack {
+            Button {
+                if let saved {
+                    playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL)
+                } else { action = EpisodeAction(episode: episode, download: false) }
+            } label: {
                 HStack(spacing: 12) {
                     EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail,
                                      anime: title, episode: episode,
-                                     localURL: store.state.downloads.first(where: {
-                                         $0.anime.id == title.id && $0.episode == episode && $0.state == .ready
-                                     })?.localURL)
+                                     localURL: saved?.localURL)
                         .frame(width: 100, height: 100 * 9 / 16)
                         .clipShape(RoundedRectangle(cornerRadius: 9))
                     VStack(alignment: .leading, spacing: 4) {
@@ -153,10 +158,34 @@ struct AnimeDetailView: View {
                         if let progress = store.progress(title, episode: episode) {
                             Text(progress.finished ? "Watched" : "Continue at \(Int(progress.seconds / 60)) min").font(.caption).foregroundStyle(.secondary)
                         }
+                        if saved != nil {
+                            Label("Downloaded · Available offline", systemImage: "checkmark.circle.fill")
+                                .font(.caption).foregroundStyle(Theme.purple)
+                        } else if let pending {
+                            Text(pending.state == .downloading ? "Downloading · \(Int(pending.fraction * 100))%" : pending.state == .interrupted ? "Download interrupted" : "Download \(pending.state.label.lowercased())")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
-            Button { action = EpisodeAction(episode: episode, download: true) } label: { Image(systemName: "arrow.down.to.line").frame(width: 44, height: 44) }.buttonStyle(.borderless).accessibilityLabel("Download episode \(episode)")
+            if let saved {
+                Button { playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL) } label: {
+                    Image(systemName: "play.circle.fill").frame(width: 44, height: 44)
+                }.buttonStyle(.borderless).accessibilityLabel("Play downloaded episode \(episode)")
+            } else if let pending {
+                if pending.state == .interrupted || pending.state == .paused {
+                    Button { downloads.resume(pending.id) } label: {
+                        Image(systemName: "arrow.clockwise").frame(width: 44, height: 44)
+                    }.buttonStyle(.borderless).accessibilityLabel("Retry or resume download for episode \(episode)")
+                } else {
+                    ProgressView().frame(width: 44, height: 44)
+                        .accessibilityLabel("Episode \(episode) download \(pending.state.label.lowercased())")
+                }
+            } else {
+                Button { action = EpisodeAction(episode: episode, download: true) } label: {
+                    Image(systemName: "arrow.down.to.line").frame(width: 44, height: 44)
+                }.buttonStyle(.borderless).accessibilityLabel("Download episode \(episode)")
+            }
         }
     }
 }
