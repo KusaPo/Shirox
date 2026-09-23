@@ -14,6 +14,14 @@ Purple accents, a top-10 AniList trending carousel, Animex catalog and provider 
 
 The Python project generator is only for maintainers; you do not need to run it to open the checked-in Xcode project.
 
+## Test with AltStore
+
+The **Kairo iOS** GitHub Actions workflow also builds an arm64 iPhone IPA. Open a successful run for this branch and download **Kairo-AltStore-IPA** from Artifacts. Unzip it to get `Kairo.ipa`; save that file to your iPhone's Files app and import it using **AltStore Classic → My Apps → +**. Use your normal AltStore signing setup (AltServer if required by your setup).
+
+This is an unsigned development IPA for AltStore to sign, not an App Store or TestFlight release. Requires iOS 17 or newer. It includes the latest HLS session fix; complete the device acceptance checklist below to verify actual downloads and offline playback.
+
+To make the same IPA on a Mac with Xcode installed, run `bash kairo-ios/scripts/build_ipa.sh` from the repository root. Output: `kairo-ios/build/ipa/Kairo.ipa`. No signing credentials are needed to package it; AltStore handles signing during installation. The build checks the device platform, arm64 executable, package layout, and ZIP integrity, and includes a SHA-256 checksum.
+
 ## Implemented paths
 
 - The approved purple K/play mark is installed as the app icon and displayed in Sources & preferences.
