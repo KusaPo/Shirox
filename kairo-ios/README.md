@@ -16,6 +16,7 @@ The Python project generator is only for maintainers; you do not need to run it 
 
 ## Implemented paths
 
+- The approved purple K/play mark is installed as the app icon and displayed in Sources & preferences.
 - Settings → Appearance offers System, Light and Dark modes. The choice takes effect immediately and persists between launches without changing existing library/history data.
 - Preview artwork fills its bounds. Wide banner frames reduce cropping, and portrait-only headers use a complete poster over a blurred full-bleed backdrop. Trending titles/actions remain below the artwork.
 - Episode rows show names and thumbnails when available: AniList streaming episode metadata supplies matched previews, and Jikan/MyAnimeList supplies additional titles. Matching uses exact catalog IDs and explicit episode numbers, never array positions. Missing previews show a neutral placeholder. Long series use 100-episode ranges with cached, rate-spaced metadata requests; metadata failures do not block playback.
@@ -30,7 +31,7 @@ The Python project generator is only for maintainers; you do not need to run it 
 ## Explicitly unfinished
 
 - Additional community-module runtimes and a second verified catalog provider. Importing a library link does not install an operational provider yet.
-- Exact per-resolution selection, external subtitle file downloads, configurable autoplay-next, multi-season mapping, optional account sync, background PiP lifecycle polish, and production app artwork.
+- Exact per-resolution selection, external subtitle file downloads, configurable autoplay-next, multi-season mapping, optional account sync, and background PiP lifecycle polish.
 - Live video decoding, actual offline audio/subtitle availability, background completion, interrupted-URL recovery, and device accessibility have not been verified merely by compiling this project.
 - Provider request headers use AVURLAsset's widely used `AVURLAssetHTTPHeaderFieldsKey` option, whose portability must be tested. A provider requiring an unsupported transport may need a different integration.
 - Retrying an interrupted transfer with no surviving OS task resolves a fresh media link and starts again; it does not promise byte-level resume across changed URLs.

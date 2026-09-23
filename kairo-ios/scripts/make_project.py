@@ -16,16 +16,20 @@ for file in app + tests:
     path = file.relative_to(root).as_posix()
     add(path, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{path}"; sourceTree = SOURCE_ROOT;')
     add('build:' + path, f'isa = PBXBuildFile; fileRef = {uid(path)};')
+assets = 'Kairo/Resources/Assets.xcassets'
+add(assets, f'isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "{assets}"; sourceTree = SOURCE_ROOT;')
+add('build:' + assets, f'isa = PBXBuildFile; fileRef = {uid(assets)};')
 add('product', 'isa = PBXFileReference; explicitFileType = wrapper.application; path = Kairo.app; sourceTree = BUILT_PRODUCTS_DIR;')
 add('testproduct', 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = KairoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
-add('appgroup', f'isa = PBXGroup; name = App; children = {refs([p.relative_to(root).as_posix() for p in app])}; sourceTree = "<group>";')
+add('appgroup', f'isa = PBXGroup; name = App; children = {refs([p.relative_to(root).as_posix() for p in app] + [assets])}; sourceTree = "<group>";')
 add('testgroup', f'isa = PBXGroup; name = Tests; children = {refs([p.relative_to(root).as_posix() for p in tests])}; sourceTree = "<group>";')
 add('products', f'isa = PBXGroup; name = Products; children = {refs(["product", "testproduct"])}; sourceTree = "<group>";')
 add('rootgroup', f'isa = PBXGroup; children = {refs(["appgroup", "testgroup", "products"])}; sourceTree = "<group>";')
 for prefix, files in [('app', app), ('tests', tests)]:
     add(prefix + 'sources', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {refs(["build:"+p.relative_to(root).as_posix() for p in files])}; runOnlyForDeploymentPostprocessing = 0;')
     for phase, kind in [('frameworks', 'PBXFrameworksBuildPhase'), ('resources', 'PBXResourcesBuildPhase')]:
-        add(prefix + phase, f'isa = {kind}; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
+        resource_files = refs(['build:' + assets]) if prefix == 'app' and phase == 'resources' else '()'
+        add(prefix + phase, f'isa = {kind}; buildActionMask = 2147483647; files = {resource_files}; runOnlyForDeploymentPostprocessing = 0;')
 for prefix in ['project', 'app', 'tests']:
     for mode in ['Debug', 'Release']:
         settings = 'IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; '
@@ -34,7 +38,7 @@ for prefix in ['project', 'app', 'tests']:
         else:
             settings += 'TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; PRODUCT_NAME = "$(TARGET_NAME)"; '
             settings += 'LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks",); '
-            if prefix == 'app': settings += 'PRODUCT_BUNDLE_IDENTIFIER = net.kusapo.kairo; INFOPLIST_FILE = Kairo/Resources/Info.plist; GENERATE_INFOPLIST_FILE = NO; '
+            if prefix == 'app': settings += 'PRODUCT_BUNDLE_IDENTIFIER = net.kusapo.kairo; INFOPLIST_FILE = Kairo/Resources/Info.plist; GENERATE_INFOPLIST_FILE = NO; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; '
             else: settings += 'PRODUCT_BUNDLE_IDENTIFIER = net.kusapo.kairo.tests; GENERATE_INFOPLIST_FILE = YES; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kairo.app/Kairo"; BUNDLE_LOADER = "$(TEST_HOST)"; '
         add(prefix + mode, f'isa = XCBuildConfiguration; buildSettings = {{ {settings} }}; name = {mode};')
     add(prefix + 'configs', f'isa = XCConfigurationList; buildConfigurations = {refs([prefix+"Debug", prefix+"Release"])}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')

@@ -82,6 +82,16 @@ struct SourcesView: View {
     var body: some View {
         Form {
             Section {
+                HStack(spacing: 14) {
+                    Image("KairoLogo").resizable().scaledToFit().frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 13)).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("kairo").font(.title2.bold())
+                        Text("Your next adventure").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 4)
+            }
+            Section {
                 Picker("Appearance", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
                 }.pickerStyle(.segmented)
