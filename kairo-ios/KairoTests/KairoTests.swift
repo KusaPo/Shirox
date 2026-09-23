@@ -1,7 +1,19 @@
 import XCTest
+import AVFoundation
 @testable import Kairo
 
 final class KairoTests: XCTestCase {
+    func testNativeHLSTaskCreationWithoutStartingTransfer() {
+        let settings = URLSessionConfiguration.background(withIdentifier: "net.kusapo.kairo.test-hls." + UUID().uuidString)
+        let session = AVAssetDownloadURLSession(configuration: settings, assetDownloadDelegate: nil, delegateQueue: .main)
+        defer { session.invalidateAndCancel() }
+        let asset = AVURLAsset(url: URL(string: "https://example.com/episode.m3u8")!)
+        let configuration = AVAssetDownloadConfiguration(asset: asset, title: "Task creation test")
+        let task = session.makeAssetDownloadTask(downloadConfiguration: configuration)
+        defer { task.cancel() }
+        XCTAssertEqual(task.state, .suspended)
+        // Never resume: this checks the failing creation boundary, not source availability.
+    }
     func testEpisodePreviewsMatchExplicitNumbersNotArrayOrder() {
         let rows: [[String: Any]] = [
             ["title": "Episode 12 - Finale", "thumbnail": "https://images.example.com/12.jpg"],

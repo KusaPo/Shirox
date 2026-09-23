@@ -25,7 +25,7 @@ The Python project generator is only for maintainers; you do not need to run it 
 - Episode provider lookup with Sub/Dub selection and visible HTTP/API errors. Only HTTPS HLS/MP4 media links are accepted; HTML embeds are not presented as video files.
 - Native AVPlayerViewController, supported system audio/subtitle controls, progress persistence, resume and saved-title library.
 - Single or next-three episode downloads, two concurrent transfers, queue/pause/retry/remove, separate Wi-Fi/cellular background sessions, restored task records, local offline playback, and file deletion that preserves history.
-- HLS downloads use Apple's asset download APIs. Embedded English subtitles are selected when offered. Direct video downloads use background URLSession transfers. Readiness includes a local playable-media check.
+- HLS downloads use Apple's current AVAssetDownloadConfiguration API. Preparation checks whether the asset is playable, protected, and has a finite duration; failures include the native error domain/code when available. Embedded English subtitles are selected when offered. Direct video downloads use background URLSession transfers. Readiness includes a local playable-media check.
 - Source-link manifest inspection. It does **not** execute arbitrary imported JavaScript.
 
 ## Explicitly unfinished

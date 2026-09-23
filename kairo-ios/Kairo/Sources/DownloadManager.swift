@@ -117,19 +117,34 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             let task: URLSessionTask
             if stream.isHLS {
                 let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
-                var downloadOptions: [String: Any] = [:]
+                guard try await asset.load(.isPlayable) else {
+                    throw KairoError.message("This provider's stream cannot be opened by iOS. Try another provider for this episode.")
+                }
+                let protected = try await asset.load(.hasProtectedContent)
+                guard !protected else {
+                    throw KairoError.message("This stream requires an offline content license. Kairo does not support downloading it.")
+                }
+                let duration = try await asset.load(.duration)
+                guard duration.seconds.isFinite, duration.seconds > 0 else {
+                    throw KairoError.message("iOS could not confirm a completed episode to save. Live or unfinished streams cannot be downloaded. Try another provider.")
+                }
+                let configuration = AVAssetDownloadConfiguration(asset: asset, title: "\(item.anime.title) · Episode \(item.episode)")
+                let preferredSelection = try await asset.load(.preferredMediaSelection)
                 // Save the selected embedded caption track, if offered. External subtitle URLs
                 // need a separate implementation and are not claimed to be downloaded.
                 if let group = try await asset.loadMediaSelectionGroup(for: .legible),
                    let english = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first,
-                   let selection = asset.preferredMediaSelection.mutableCopy() as? AVMutableMediaSelection {
+                   let selection = preferredSelection.mutableCopy() as? AVMutableMediaSelection {
                     selection.select(english, in: group)
-                    downloadOptions[AVAssetDownloadTaskMediaSelectionKey] = selection
+                    configuration.primaryContentConfiguration.mediaSelections = [selection]
+                } else {
+                    configuration.primaryContentConfiguration.mediaSelections = [preferredSelection]
                 }
                 try Task.checkCancellation()
-                guard let session = sessions["hls." + network] as? AVAssetDownloadURLSession,
-                      let assetTask = session.makeAssetDownloadTask(asset: asset, assetTitle: "\(item.anime.title) · Episode \(item.episode)", assetArtworkData: nil, options: downloadOptions) else { throw KairoError.message("iOS could not create a download for this HLS stream.") }
-                task = assetTask
+                guard let session = sessions["hls." + network] as? AVAssetDownloadURLSession else {
+                    throw KairoError.message("The HLS download session is unavailable. Close and reopen Kairo, then retry.")
+                }
+                task = session.makeAssetDownloadTask(downloadConfiguration: configuration)
             } else {
                 var request = URLRequest(url: stream.url)
                 request.allHTTPHeaderFields = stream.headers
@@ -141,7 +156,23 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             store.updateDownload(item.id) { $0.state = .downloading; $0.fraction = 0; $0.message = nil }
             task.resume()
         } catch is CancellationError { /* A pause or removal owns the resulting state. */ }
-        catch { store.updateDownload(item.id) { $0.state = .interrupted; $0.message = error.localizedDescription } }
+        catch {
+            guard !Task.isCancelled else { return }
+            store.updateDownload(item.id) { $0.state = .interrupted; $0.message = Self.failureMessage(error, stage: "Preparing download") }
+        }
+    }
+
+    private static func failureMessage(_ error: Error, stage: String) -> String {
+        if error is KairoError { return error.localizedDescription }
+        let failure = error as NSError
+        var detail = "\(stage): \(failure.localizedDescription) [\(failure.domain) \(failure.code)]"
+        if let underlying = failure.userInfo[NSUnderlyingErrorKey] as? NSError {
+            detail += " [\(underlying.domain) \(underlying.code)]"
+        }
+        #if targetEnvironment(simulator)
+        detail += " If this repeats in Simulator, test the same provider on your iPhone."
+        #endif
+        return detail
     }
 
     func pause(_ id: UUID) {
@@ -203,7 +234,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
         guard let id = id(task) else { return }
         tasks[id] = nil
         guard let record = store.state.downloads.first(where: { $0.id == id }) else { pump(); return }
-        if let message = transferErrors.removeValue(forKey: id) ?? error?.localizedDescription {
+        if let message = transferErrors.removeValue(forKey: id) ?? error.map({ Self.failureMessage($0, stage: "Download failed") }) {
             store.updateDownload(id) { $0.state = .interrupted; $0.message = message }
             pump()
             return
