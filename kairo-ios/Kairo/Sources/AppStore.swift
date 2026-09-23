@@ -48,6 +48,12 @@ final class AppStore: ObservableObject {
         state.progress.first { $0.id == WatchProgress.key(anime.id, episode) }
     }
 
+    func readyDownload(_ anime: Anime, episode: Int, audio: AudioChoice) -> DownloadRecord? {
+        state.downloads.first {
+            $0.anime.id == anime.id && $0.episode == episode && $0.audio == audio && $0.state == .ready && $0.localURL != nil
+        }
+    }
+
     var continuing: [WatchProgress] {
         var seen = Set<String>()
         return state.progress.sorted { $0.updated > $1.updated }.filter {

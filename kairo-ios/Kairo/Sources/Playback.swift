@@ -7,6 +7,8 @@ struct PlaybackRequest: Identifiable {
     var episode: Int
     var stream: StreamOption?
     var localURL: URL?
+    var localAudio: AudioChoice? = nil
+    var audio: AudioChoice? { stream?.audio ?? localAudio }
 }
 
 struct SkipInterval {
@@ -47,10 +49,14 @@ final class PlaybackController: ObservableObject {
     private var skipped = Set<Int>()
     private var observation: NSKeyValueObservation?
     private var timeToken: Any?
-    private var active: PlaybackRequest?
+    @Published private(set) var active: PlaybackRequest?
+    @Published var audioNotice: String?
+    @Published private(set) var isSwitchingAudio = false
+    private var lastProgressSave = Date.distantPast
     private weak var store: AppStore?
 
-    @MainActor func open(_ request: PlaybackRequest, store: AppStore) async {
+    @MainActor func open(_ request: PlaybackRequest, store: AppStore, resumeAt: Double? = nil) async {
+        saveProgress()
         isPreparing = true
         error = nil
         skipPrompt = nil
@@ -58,7 +64,6 @@ final class PlaybackController: ObservableObject {
         skipped = []
         if let timeToken { player.removeTimeObserver(timeToken); self.timeToken = nil }
         observation = nil
-        active = request
         self.store = store
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -69,19 +74,30 @@ final class PlaybackController: ObservableObject {
             let asset = AVURLAsset(url: url, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
             guard try await asset.load(.isPlayable) else { throw KairoError.message("This stream was found but iOS cannot play its format. Try another provider.") }
             try Task.checkCancellation()
+            active = request
             let item = AVPlayerItem(asset: asset)
+            if let audio = request.audio,
+               let group = try? await asset.loadMediaSelectionGroup(for: .audible),
+               let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: audio.languageCode)).first {
+                item.select(option, in: group)
+            }
+            try Task.checkCancellation()
             observation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
                 if item.status == .failed {
                     DispatchQueue.main.async { self?.error = "Playback failed. \(item.error?.localizedDescription ?? "Try another provider.")" }
                 }
             }
             player.replaceCurrentItem(with: item)
-            if let progress = store.progress(request.anime, episode: request.episode), !progress.finished {
+            if let resumeAt, resumeAt.isFinite, resumeAt > 0 {
+                await player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
+            } else if let progress = store.progress(request.anime, episode: request.episode), !progress.finished {
                 await player.seek(to: CMTime(seconds: progress.seconds, preferredTimescale: 600))
             }
             try Task.checkCancellation()
             timeToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { [weak self] _ in
-                self?.saveProgress()
+                if let self, Date().timeIntervalSince(self.lastProgressSave) >= 5 {
+                    self.saveProgress(); self.lastProgressSave = Date()
+                }
                 self?.checkSkip()
             }
             player.play()
@@ -111,23 +127,53 @@ final class PlaybackController: ObservableObject {
         skipPrompt = nil
         player.seek(to: CMTime(seconds: interval.end, preferredTimescale: 600))
     }
-    @MainActor func playNext(after request: PlaybackRequest, store: AppStore) async {
+    @MainActor func playNext(store: AppStore) async {
+        guard let request = active, !isPreparing, !isSwitchingAudio else { return }
         let episode = request.episode + 1
         guard request.anime.episodeCount.map({ episode <= $0 }) ?? false else { return }
+        let audio = request.audio ?? store.state.preferences.audio
         isPreparing = true
         do {
-            if let local = store.state.downloads.first(where: {
-                $0.anime.id == request.anime.id && $0.episode == episode && $0.state == .ready
-            })?.localURL {
-                await open(PlaybackRequest(anime: request.anime, episode: episode, stream: nil, localURL: local), store: store)
+            if let saved = store.readyDownload(request.anime, episode: episode, audio: audio) {
+                try Task.checkCancellation()
+                await open(PlaybackRequest(anime: request.anime, episode: episode, localURL: saved.localURL, localAudio: saved.audio), store: store)
             } else {
-                let options = try await CatalogAPI.shared.streams(request.anime, episode: episode, audio: request.stream?.audio ?? .sub)
+                guard store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to stream the next episode, or download its selected language first.") }
+                let options = try await CatalogAPI.shared.streams(request.anime, episode: episode, audio: audio)
+                try Task.checkCancellation()
                 guard let choice = options.first(where: { $0.provider == request.stream?.provider }) ?? options.first else {
                     throw KairoError.message("The next episode has no playable stream.")
                 }
                 await open(PlaybackRequest(anime: request.anime, episode: episode, stream: choice), store: store)
             }
-        } catch { self.error = "Couldn't start episode \(episode): \(error.localizedDescription)"; isPreparing = false }
+        } catch is CancellationError { isPreparing = false }
+        catch { self.error = "Couldn't start episode \(episode) in \(audio.label): \(error.localizedDescription)"; isPreparing = false }
+    }
+
+    @MainActor func switchAudio(to audio: AudioChoice, store: AppStore) async {
+        guard let request = active, !isPreparing, !isSwitchingAudio, request.audio != audio else { return }
+        isSwitchingAudio = true; audioNotice = nil
+        defer { isSwitchingAudio = false }
+        do {
+            let replacement: PlaybackRequest
+            if let saved = store.readyDownload(request.anime, episode: request.episode, audio: audio) {
+                replacement = PlaybackRequest(anime: request.anime, episode: request.episode, localURL: saved.localURL, localAudio: audio)
+            } else {
+                guard store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to check this language online.") }
+                let options = try await CatalogAPI.shared.streams(request.anime, episode: request.episode, audio: audio)
+                guard let stream = options.first(where: { $0.provider == request.stream?.provider }) ?? options.first else {
+                    throw KairoError.message("No provider offers \(audio.label) for this episode.")
+                }
+                replacement = PlaybackRequest(anime: request.anime, episode: request.episode, stream: stream)
+            }
+            try Task.checkCancellation()
+            let position = player.currentTime().seconds
+            await open(replacement, store: store, resumeAt: position)
+            if error == nil, !Task.isCancelled {
+                store.state.preferences.audio = audio; store.save()
+            }
+        } catch is CancellationError { }
+        catch { audioNotice = "Couldn't switch to \(audio.label). \(error.localizedDescription)" }
     }
 
     func saveProgress(finished: Bool = false) {
@@ -141,6 +187,7 @@ final class PlaybackController: ObservableObject {
         if let timeToken { player.removeTimeObserver(timeToken); self.timeToken = nil }
         observation = nil
         player.replaceCurrentItem(with: nil)
+        active = nil
     }
 }
 
@@ -176,10 +223,11 @@ struct PlayerScreen: View {
     let request: PlaybackRequest
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var controller = PlaybackController()
     @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
     @AppStorage("playerAutoSkipIntro") private var autoSkipIntro = false
-    @State private var currentRequest: PlaybackRequest?
+    @State private var transitionTask: Task<Void, Never>?
     @State private var controlsVisible = true
     @State private var hideControlsTask: Task<Void, Never>?
     var body: some View {
@@ -212,6 +260,23 @@ struct PlayerScreen: View {
                 }.accessibilityLabel("Close player")
                 Spacer()
                 Menu {
+                    ForEach(AudioChoice.allCases) { choice in
+                        Button {
+                            transitionTask?.cancel()
+                            transitionTask = Task { await controller.switchAudio(to: choice, store: store) }
+                        } label: {
+                            if controller.active?.audio == choice { Label(choice.label, systemImage: "checkmark") }
+                            else { Text(choice.label) }
+                        }
+                    }
+                    Text("Undownloaded audio requires a connection.")
+                } label: {
+                    Text(controller.isSwitchingAudio ? "Checking…" : (controller.active?.audio ?? request.audio ?? store.state.preferences.audio).shortLabel)
+                        .font(.subheadline.bold()).padding(.horizontal, 12).frame(height: 38)
+                        .background(.black.opacity(0.65), in: Capsule())
+                }.disabled(controller.isPreparing || controller.isSwitchingAudio)
+                    .accessibilityLabel("Sub or Dub audio")
+                Menu {
                     Toggle("Auto-play next episode", isOn: $autoPlayNext)
                     Toggle("Auto-skip intro and recap", isOn: $autoSkipIntro)
                 } label: {
@@ -226,19 +291,23 @@ struct PlayerScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: controlsVisible)
-        .task { currentRequest = request; controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
+        .task { controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
+        .alert("Audio unavailable", isPresented: Binding(get: { controller.audioNotice != nil }, set: { if !$0 { controller.audioNotice = nil } })) {
+            Button("OK", role: .cancel) { controller.audioNotice = nil }
+        } message: { Text(controller.audioNotice ?? "") }
         .onChange(of: controller.isPreparing) { _, preparing in
             if preparing { hideControlsTask?.cancel(); controlsVisible = true }
             else { scheduleHideControls() }
         }
         .onChange(of: autoSkipIntro) { _, enabled in controller.autoSkip = enabled }
-        .onDisappear { hideControlsTask?.cancel(); controller.stop() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { controller.saveProgress() } }
+        .onDisappear { transitionTask?.cancel(); hideControlsTask?.cancel(); controller.stop() }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
             guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
             controller.saveProgress(finished: true)
-            if autoPlayNext, let currentRequest {
-                Task { await controller.playNext(after: currentRequest, store: store) }
-                self.currentRequest = PlaybackRequest(anime: currentRequest.anime, episode: currentRequest.episode + 1, stream: nil)
+            if autoPlayNext {
+                transitionTask?.cancel()
+                transitionTask = Task { await controller.playNext(store: store) }
             }
         }
     }

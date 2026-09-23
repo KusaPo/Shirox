@@ -3,6 +3,38 @@ import AVFoundation
 @testable import Kairo
 
 final class KairoTests: XCTestCase {
+    func testDownloadsSortNumericallyRegardlessOfAddedTimeOrState() {
+        let anime = Anime(title: "Example")
+        let rows = [DownloadRecord(anime: anime, episode: 10, audio: .dub, state: .ready),
+                    DownloadRecord(anime: anime, episode: 2, audio: .sub, state: .queued),
+                    DownloadRecord(anime: anime, episode: 1, audio: .dub, state: .ready)]
+        XCTAssertEqual(rows.sorted(by: DownloadRecord.episodeOrder).map(\.episode), [1, 2, 10])
+    }
+    func testOfflineLookupNeverSubstitutesSubForDub() {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = AppStore(directory: folder)
+        let anime = Anime(anilistID: 77, title: "Example")
+        store.state.downloads = [DownloadRecord(anime: anime, episode: 2, audio: .sub, state: .ready, relativePath: "Library/sub.movpkg")]
+        XCTAssertNil(store.readyDownload(anime, episode: 2, audio: .dub))
+        XCTAssertNotNil(store.readyDownload(anime, episode: 2, audio: .sub))
+        let dub = DownloadRecord(anime: anime, episode: 2, audio: .dub, state: .ready, relativePath: "Library/dub.movpkg")
+        store.state.downloads.append(dub)
+        XCTAssertEqual(store.readyDownload(anime, episode: 2, audio: .dub)?.id, dub.id)
+        let request = PlaybackRequest(anime: anime, episode: 2, localURL: dub.localURL, localAudio: dub.audio)
+        XCTAssertEqual(request.audio, .dub)
+    }
+    func testWatchProgressDistinguishesNearlyDoneFromWatched() {
+        let anime = Anime(title: "Example")
+        var progress = WatchProgress(anime: anime, episode: 1, seconds: 1320, duration: 1440)
+        XCTAssertEqual(progress.summary, "Almost finished · 22:00 of 24:00")
+        XCTAssertEqual(progress.remainingLabel, "91% watched · 2:00 left")
+        XCTAssertFalse(progress.finished)
+        progress.finished = true
+        XCTAssertEqual(progress.summary, "Watched")
+        progress.seconds = .nan
+        XCTAssertEqual(progress.fraction, 0)
+    }
     func testStoredHLSSessionsCreateTasksForBothNetworkPolicies() {
         let prefix = "net.kusapo.kairo.test-hls." + UUID().uuidString + "."
         let sessions = DownloadSessions(prefix: prefix, delegate: nil)

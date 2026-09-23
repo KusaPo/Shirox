@@ -26,6 +26,11 @@ struct DownloadsView: View {
     @EnvironmentObject private var downloads: DownloadManager
     @State private var playback: PlaybackRequest?
     @State private var deletion: DownloadRecord?
+    private var titles: [Anime] {
+        var seen = Set<String>()
+        return store.state.downloads.map(\.anime).filter { seen.insert($0.id).inserted }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
     private var availableStorage: String {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         guard let bytes = try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage else { return "Storage unavailable" }
@@ -38,11 +43,10 @@ struct DownloadsView: View {
                 Text("Up to two transfers at a time. Wi-Fi preference applies when each new transfer starts.").font(.caption).foregroundStyle(.secondary)
             }
             if store.state.downloads.isEmpty { ContentUnavailableView("Take a story with you", systemImage: "arrow.down.circle", description: Text("Open a title and tap the download button beside an episode.")) }
-            Section("Queue") {
-                ForEach(store.state.downloads.filter { $0.state != .ready }) { item in row(item) }
-            }
-            Section("Ready for anywhere") {
-                ForEach(store.state.downloads.filter { $0.state == .ready }) { item in row(item) }
+            ForEach(titles) { anime in
+                Section(anime.title) {
+                    ForEach(store.state.downloads.filter { $0.anime.id == anime.id }.sorted(by: DownloadRecord.episodeOrder)) { item in row(item) }
+                }
             }
         }
         .navigationTitle("Downloads")
@@ -59,7 +63,7 @@ struct DownloadsView: View {
                 AnimeRow(anime: item.anime, subtitle: "Episode \(item.episode) · \(item.audio.label)")
                 Spacer()
                 if item.state == .ready {
-                    Button { playback = PlaybackRequest(anime: item.anime, episode: item.episode, localURL: item.localURL) } label: { Image(systemName: "play.fill").frame(width: 44, height: 44) }.accessibilityLabel("Play downloaded episode")
+                    Button { playback = PlaybackRequest(anime: item.anime, episode: item.episode, localURL: item.localURL, localAudio: item.audio) } label: { Image(systemName: "play.fill").frame(width: 44, height: 44) }.accessibilityLabel("Play downloaded episode")
                 } else if item.state == .downloading || item.state == .resolving || item.state == .queued {
                     Button { downloads.pause(item.id) } label: { Image(systemName: "pause.fill").frame(width: 44, height: 44) }.accessibilityLabel("Pause download")
                 } else {
@@ -68,6 +72,7 @@ struct DownloadsView: View {
             }
             if item.state == .downloading { ProgressView(value: item.fraction) }
             Text(item.state == .ready ? "Available offline" : item.state.label).font(.caption).foregroundStyle(Theme.purple)
+            EpisodeWatchProgress(progress: store.progress(item.anime, episode: item.episode))
             if let message = item.message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }.swipeActions { Button("Remove", role: .destructive) { deletion = item } }
     }

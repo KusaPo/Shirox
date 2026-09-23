@@ -116,6 +116,21 @@ struct AnimeRow: View {
     }
 }
 
+struct EpisodeWatchProgress: View {
+    let progress: WatchProgress?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let progress {
+                Text(progress.summary).font(.caption).foregroundStyle(.secondary)
+                ProgressView(value: progress.finished ? 1 : progress.fraction).tint(Theme.purple)
+                if !progress.finished { Text(progress.remainingLabel).font(.caption2).foregroundStyle(.secondary) }
+            } else {
+                Text("Not started").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 struct ProblemView: View {
     let message: String
     let retry: () -> Void

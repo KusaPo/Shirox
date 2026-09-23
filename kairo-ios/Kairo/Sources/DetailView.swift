@@ -134,12 +134,13 @@ struct AnimeDetailView: View {
     }
     private func episodeRow(_ episode: Int) -> some View {
         let matching = store.state.downloads.filter { $0.anime.id == title.id && $0.episode == episode }
-        let saved = matching.first(where: { $0.state == .ready && $0.localURL != nil })
+        let ready = matching.filter { $0.state == .ready && $0.localURL != nil }
+        let saved = ready.first(where: { $0.audio == store.state.preferences.audio }) ?? ready.first
         let pending = matching.first(where: { $0.state != .ready })
         return HStack {
             Button {
                 if let saved {
-                    playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL)
+                    playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL, localAudio: saved.audio)
                 } else { action = EpisodeAction(episode: episode, download: false) }
             } label: {
                 HStack(spacing: 12) {
@@ -155,11 +156,9 @@ struct AnimeDetailView: View {
                         } else {
                             Text("Episode \(episode)").font(.subheadline.weight(.semibold))
                         }
-                        if let progress = store.progress(title, episode: episode) {
-                            Text(progress.finished ? "Watched" : "Continue at \(Int(progress.seconds / 60)) min").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if saved != nil {
-                            Label("Downloaded · Available offline", systemImage: "checkmark.circle.fill")
+                        EpisodeWatchProgress(progress: store.progress(title, episode: episode))
+                        if let saved {
+                            Label("Downloaded · \(saved.audio.label)", systemImage: "checkmark.circle.fill")
                                 .font(.caption).foregroundStyle(Theme.purple)
                         } else if let pending {
                             Text(pending.state == .downloading ? "Downloading · \(Int(pending.fraction * 100))%" : pending.state == .interrupted ? "Download interrupted" : "Download \(pending.state.label.lowercased())")
@@ -169,7 +168,7 @@ struct AnimeDetailView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
             if let saved {
-                Button { playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL) } label: {
+                Button { playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL, localAudio: saved.audio) } label: {
                     Image(systemName: "play.circle.fill").frame(width: 44, height: 44)
                 }.buttonStyle(.borderless).accessibilityLabel("Play downloaded episode \(episode)")
             } else if let pending {

@@ -4,6 +4,8 @@ enum AudioChoice: String, Codable, CaseIterable, Identifiable {
     case sub, dub
     var id: String { rawValue }
     var label: String { self == .sub ? "Original / Sub" : "English dub" }
+    var shortLabel: String { self == .sub ? "Sub" : "Dub" }
+    var languageCode: String { self == .sub ? "ja" : "en" }
 }
 
 struct Anime: Codable, Identifiable, Hashable {
@@ -40,6 +42,24 @@ struct WatchProgress: Codable, Identifiable {
     var finished: Bool = false
     var id: String { Self.key(anime.id, episode) }
     static func key(_ title: String, _ episode: Int) -> String { "\(title)|episode:\(episode)" }
+    var fraction: Double {
+        guard seconds.isFinite, duration.isFinite, duration > 0 else { return 0 }
+        return min(1, max(0, seconds / duration))
+    }
+    var summary: String {
+        if finished { return "Watched" }
+        guard seconds.isFinite, duration.isFinite, duration > 0 else { return "Not started" }
+        let position = Self.timestamp(min(max(0, seconds), duration))
+        return "\(fraction >= 0.9 ? "Almost finished" : "Continue") · \(position) of \(Self.timestamp(duration))"
+    }
+    var remainingLabel: String {
+        guard seconds.isFinite, duration.isFinite, duration > 0 else { return "" }
+        return "\(Int(fraction * 100))% watched · \(Self.timestamp(max(0, duration - seconds))) left"
+    }
+    private static func timestamp(_ seconds: Double) -> String {
+        let value = Int(min(max(0, seconds), 359999))
+        return String(format: "%d:%02d", value / 60, value % 60)
+    }
 }
 
 enum DownloadState: String, Codable {
@@ -61,6 +81,11 @@ struct DownloadRecord: Codable, Identifiable {
     var localURL: URL? {
         guard let relativePath else { return nil }
         return LocalDownloadStorage.url(forRelativePath: relativePath)
+    }
+    static func episodeOrder(_ lhs: DownloadRecord, _ rhs: DownloadRecord) -> Bool {
+        if lhs.episode != rhs.episode { return lhs.episode < rhs.episode }
+        if lhs.audio != rhs.audio { return lhs.audio.rawValue < rhs.audio.rawValue }
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 }
 

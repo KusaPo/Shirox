@@ -177,10 +177,15 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
                 let preferredSelection = try await asset.load(.preferredMediaSelection)
                 // Save the selected embedded caption track, if offered. External subtitle URLs
                 // need a separate implementation and are not claimed to be downloaded.
-                if let group = try await asset.loadMediaSelectionGroup(for: .legible),
-                   let english = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first,
-                   let selection = preferredSelection.mutableCopy() as? AVMutableMediaSelection {
-                    selection.select(english, in: group)
+                if let selection = preferredSelection.mutableCopy() as? AVMutableMediaSelection {
+                    if let group = try await asset.loadMediaSelectionGroup(for: .audible),
+                       let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: item.audio.languageCode)).first {
+                        selection.select(option, in: group)
+                    }
+                    if let group = try await asset.loadMediaSelectionGroup(for: .legible),
+                       let english = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first {
+                        selection.select(english, in: group)
+                    }
                     configuration.primaryContentConfiguration.mediaSelections = [selection]
                 } else {
                     configuration.primaryContentConfiguration.mediaSelections = [preferredSelection]
