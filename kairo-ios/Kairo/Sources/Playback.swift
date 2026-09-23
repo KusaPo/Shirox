@@ -12,12 +12,15 @@ struct PlaybackRequest: Identifiable {
 final class PlaybackController: ObservableObject {
     let player = AVPlayer()
     @Published var error: String?
+    @Published var isPreparing = true
     private var observation: NSKeyValueObservation?
     private var timeToken: Any?
     private var active: PlaybackRequest?
     private weak var store: AppStore?
 
     @MainActor func open(_ request: PlaybackRequest, store: AppStore) async {
+        isPreparing = true
+        error = nil
         active = request
         self.store = store
         do {
@@ -42,8 +45,9 @@ final class PlaybackController: ObservableObject {
             try Task.checkCancellation()
             timeToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main) { [weak self] _ in self?.saveProgress() }
             player.play()
+            isPreparing = false
         } catch is CancellationError { }
-        catch { self.error = error.localizedDescription }
+        catch { self.error = error.localizedDescription; isPreparing = false }
     }
 
     func saveProgress(finished: Bool = false) {
@@ -78,27 +82,36 @@ struct PlayerScreen: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = PlaybackController()
     var body: some View {
-        NavigationStack {
-            ZStack {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            NativePlayer(player: controller.player).ignoresSafeArea()
+            if controller.isPreparing {
                 Color.black.ignoresSafeArea()
-                NativePlayer(player: controller.player)
-                if let error = controller.error {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.play").font(.largeTitle)
-                        Text(error).multilineTextAlignment(.center)
-                        Button("Choose another provider") { dismiss() }.buttonStyle(.borderedProminent)
-                    }.padding(28).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22)).padding()
-                }
+                ProgressView("Preparing episode…").tint(.white).foregroundStyle(.white)
             }
-            .navigationTitle("Episode \(request.episode)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } } }
-            .task { await controller.open(request, store: store) }
-            .onDisappear { controller.stop() }
-            .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
-                guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
-                controller.saveProgress(finished: true)
+            if let error = controller.error {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.play").font(.largeTitle)
+                    Text(error).multilineTextAlignment(.center)
+                    Button("Choose another provider") { dismiss() }.buttonStyle(.borderedProminent)
+                }.padding(28).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22)).padding()
             }
+        }
+        .overlay(alignment: .topLeading) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.subheadline.bold())
+                    .frame(width: 38, height: 38)
+                    .background(.black.opacity(0.65), in: Circle())
+            }
+            .foregroundStyle(.white)
+            .accessibilityLabel("Close player")
+            .padding()
+        }
+        .task { await controller.open(request, store: store) }
+        .onDisappear { controller.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
+            controller.saveProgress(finished: true)
         }
     }
 }

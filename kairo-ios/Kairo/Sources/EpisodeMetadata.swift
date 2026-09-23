@@ -22,7 +22,8 @@ struct EpisodeMetadata: Equatable {
         guard let value = row["mal_id"] as? NSNumber else { return nil }
         let raw = value.doubleValue
         guard raw.isFinite, raw > 0, raw <= 5000, raw.rounded() == raw else { return nil }
-        let title = (row["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = ((row["title_english"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                     ?? row["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return EpisodeMetadata(number: Int(raw), title: title?.isEmpty == false ? title : nil)
     }
 
@@ -71,18 +72,41 @@ actor EpisodeMetadataAPI {
                 items = media.1
             } catch is CancellationError { throw CancellationError() }
             catch { unavailable = true }
+        } else if malID == nil {
+            // Source catalogues sometimes omit both external IDs. Only accept an
+            // exact matching AniList title to avoid using another show's episodes.
+            do {
+                let media = try await matchingMedia(anime)
+                malID = media.0
+                items = media.1
+            } catch is CancellationError { throw CancellationError() }
+            catch { unavailable = true }
+        }
+        if malID == nil && anime.anilistID != nil {
+            do {
+                let match = try await matchingMedia(anime)
+                malID = match.0
+                items += match.1
+            } catch is CancellationError { throw CancellationError() }
+            catch { unavailable = true }
         }
         if let malID, malID > 0 {
             do {
+                // Jikan serves 100-episode screen ranges in smaller API pages.
+                // Stop at its last page rather than requesting empty pages.
+                for jikanPage in ((max(1, page) - 1) * 4 + 1)...(max(1, page) * 4) {
                 // Reserve request times before suspending so concurrent detail pages
                 // cannot burst past the metadata service's rate limit.
                 let slot = max(Date(), nextJikanRequest)
                 nextJikanRequest = slot.addingTimeInterval(1)
                 let delay = slot.timeIntervalSinceNow
                 if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
-                let json = try await request(URL(string: "https://api.jikan.moe/v4/anime/\(malID)/episodes?page=\(max(1, page))")!)
+                let json = try await request(URL(string: "https://api.jikan.moe/v4/anime/\(malID)/episodes?page=\(jikanPage)")!)
                 guard let rows = json["data"] as? [[String: Any]] else { throw KairoError.message("Unexpected episode metadata.") }
                 items += rows.compactMap(EpisodeMetadata.jikanEpisode)
+                let pagination = json["pagination"] as? [String: Any]
+                if rows.isEmpty || pagination?["has_next_page"] as? Bool == false { break }
+                }
             } catch is CancellationError { throw CancellationError() }
             catch { unavailable = true }
         }
@@ -110,6 +134,26 @@ actor EpisodeMetadataAPI {
         if mediaCache.count >= 50 { mediaCache.removeAll() }
         mediaCache[id] = (Date(), malID, episodes)
         return (malID, episodes)
+    }
+
+    private func matchingMedia(_ anime: Anime) async throws -> (Int?, [EpisodeMetadata]) {
+        let query = "query($title:String){Page(page:1,perPage:8){media(search:$title,type:ANIME){idMal title{english romaji} streamingEpisodes{title thumbnail}}}}"
+        let json = try await request(URL(string: "https://graphql.anilist.co")!,
+                                     body: ["query": query, "variables": ["title": anime.title]])
+        let rows = ((json["data"] as? [String: Any])?["Page"] as? [String: Any])?["media"] as? [[String: Any]] ?? []
+        let knownNames = [anime.title, anime.alternateTitle].compactMap { $0 }.map(Self.normalized)
+        guard let row = rows.first(where: { row in
+            let titles = row["title"] as? [String: Any] ?? [:]
+            return [titles["english"], titles["romaji"]].compactMap { $0 as? String }
+                .contains(where: { knownNames.contains(Self.normalized($0)) })
+        }) else { return (nil, []) }
+        let episodes = (row["streamingEpisodes"] as? [[String: Any]] ?? []).compactMap(EpisodeMetadata.streamingEpisode)
+        return (row["idMal"] as? Int, episodes)
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     private func request(_ url: URL, body: [String: Any]? = nil) async throws -> [String: Any] {

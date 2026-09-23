@@ -1,4 +1,6 @@
 import SwiftUI
+import AVFoundation
+import UIKit
 
 struct EpisodeAction: Identifiable {
     var id = UUID()
@@ -74,7 +76,7 @@ struct AnimeDetailView: View {
                         Stepper("Episode \(customEpisode)", value: $customEpisode, in: 1...5000)
                         episodeRow(customEpisode)
                     }
-                } header: { Text("Episodes") } footer: { Text("Titles and previews from AniList / MyAnimeList via Jikan, when available. Some episodes have no preview. Stream availability can differ by language.") }
+                } header: { Text("Episodes") } footer: { Text("Episode names come from AniList and MyAnimeList when available. Missing images use the show artwork; downloaded episodes may show a frame from the middle. Stream availability can differ by language.") }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -134,13 +136,19 @@ struct AnimeDetailView: View {
         HStack {
             Button { action = EpisodeAction(episode: episode, download: false) } label: {
                 HStack(spacing: 12) {
-                    EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail)
+                    EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail,
+                                     fallback: title.banner ?? title.cover,
+                                     localURL: store.state.downloads.first(where: {
+                                         $0.anime.id == title.id && $0.episode == episode && $0.state == .ready
+                                     })?.localURL)
                         .frame(width: 100, height: 100 * 9 / 16)
                         .clipShape(RoundedRectangle(cornerRadius: 9))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Episode \(episode)").font(.caption).foregroundStyle(.secondary)
                         if let name = episodeDetails[episode]?.title {
+                            Text("Episode \(episode)").font(.caption).foregroundStyle(.secondary)
                             Text(name).font(.subheadline.weight(.semibold)).lineLimit(3)
+                        } else {
+                            Text("Episode \(episode)").font(.subheadline.weight(.semibold))
                         }
                         if let progress = store.progress(title, episode: episode) {
                             Text(progress.finished ? "Watched" : "Continue at \(Int(progress.seconds / 60)) min").font(.caption).foregroundStyle(.secondary)
@@ -155,22 +163,46 @@ struct AnimeDetailView: View {
 
 struct EpisodeThumbnail: View {
     let url: URL?
+    let fallback: URL?
+    let localURL: URL?
+    @State private var capturedFrame: UIImage?
+    private static let frames = NSCache<NSString, UIImage>()
     var body: some View {
         GeometryReader { geometry in
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                } else {
-                    ZStack {
-                        Theme.purple.opacity(0.12)
-                        VStack(spacing: 3) {
-                            Image(systemName: "film")
-                            Text("No preview").font(.caption2)
-                        }.foregroundStyle(.secondary)
+            if let capturedFrame {
+                Image(uiImage: capturedFrame).resizable().scaledToFill()
+                    .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+            } else {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                    } else {
+                        Artwork(url: fallback)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
             }
+        }
+        .task(id: localURL?.path) {
+            capturedFrame = nil
+            guard url == nil, let localURL else { return }
+            if let cached = Self.frames.object(forKey: localURL.path as NSString) {
+                capturedFrame = cached; return
+            }
+            // HLS packages without an I-frame playlist cannot always yield a
+            // still. The show image remains visible if AVFoundation declines.
+            let asset = AVURLAsset(url: localURL)
+            guard let duration = try? await asset.load(.duration), duration.seconds.isFinite,
+                  duration.seconds > 2, !Task.isCancelled else { return }
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 480, height: 270)
+            guard let frame = try? await generator.image(at: CMTime(seconds: duration.seconds / 2, preferredTimescale: 600)),
+                  !Task.isCancelled else { return }
+            let image = UIImage(cgImage: frame.image)
+            Self.frames.setObject(image, forKey: localURL.path as NSString)
+            capturedFrame = image
         }.accessibilityHidden(true)
     }
 }

@@ -76,6 +76,7 @@ struct DownloadsView: View {
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
     @AppStorage("appearance") private var appearance: AppAppearance = .system
+    @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
     @State private var sourceLink = ""
     @State private var manifestMessage: String?
     @State private var inspecting = false
@@ -102,6 +103,13 @@ struct SourcesView: View {
                 Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
                 Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
             } header: { Text("Sources") }
+            Section {
+                Picker("Browse in Discover", selection: $discoverySource) {
+                    ForEach(DiscoverySource.allCases) { source in Text(source.name).tag(source.rawValue) }
+                }
+            } header: { Text("Discover source") } footer: {
+                Text("Animex shows its catalog. AniList shows its popular titles. Playback still needs a matching title on the enabled Animex source.")
+            }
             Section {
                 TextField("https://…/source.json", text: $sourceLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 Button(inspecting ? "Inspecting…" : "Inspect source link") { Task { await inspect() } }.disabled(inspecting || sourceLink.isEmpty)
