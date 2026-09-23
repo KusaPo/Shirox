@@ -16,6 +16,8 @@ The Python project generator is only for maintainers; you do not need to run it 
 
 ## Implemented paths
 
+- Settings → Appearance offers System, Light and Dark modes. The choice takes effect immediately and persists between launches without changing existing library/history data.
+- Preview artwork fits inside its frame without cropping. Trending artwork and title/actions occupy separate areas so text does not cover the image; a soft backdrop fills unused space around differing image proportions.
 - Top-10 AniList trending fetch, artwork, cached trending data with last-update time, six-second rotation and manual navigation. Automatic motion is disabled for Reduce Motion and VoiceOver.
 - Animex search using its documented-in-module GraphQL contract; exact AniList ID matching for trending titles, avoiding guessed source slugs.
 - Episode provider lookup with Sub/Dub selection and visible HTTP/API errors. Only HTTPS HLS/MP4 media links are accepted; HTML embeds are not presented as video files.

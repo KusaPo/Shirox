@@ -65,28 +65,27 @@ struct TrendingCarousel: View {
         VStack(spacing: 0) {
             TabView(selection: $index) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { rank, anime in
-                    ZStack(alignment: .bottomLeading) {
-                        GeometryReader { geometry in Artwork(url: anime.banner ?? anime.cover).frame(width: geometry.size.width, height: geometry.size.height).clipped() }
-                        LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom)
-                        VStack(alignment: .leading, spacing: 12) {
+                    VStack(spacing: 0) {
+                        Artwork(url: anime.banner ?? anime.cover).frame(height: 190)
+                        VStack(alignment: .leading, spacing: 10) {
                             HStack {
                                 Text("TRENDING ANIME").font(.caption.weight(.semibold)).tracking(1.5)
                                 Spacer()
-                                Text(String(format: "%02d", rank + 1)).font(.largeTitle.bold())
-                            }
-                            Spacer()
-                            Text(anime.title).font(.system(.largeTitle, design: .serif)).lineLimit(3).minimumScaleFactor(0.75)
-                            Text(anime.genres.prefix(2).joined(separator: " · ")).font(.caption)
+                                Text(String(format: "%02d", rank + 1)).font(.headline.monospacedDigit())
+                            }.foregroundStyle(Theme.purple)
+                            Text(anime.title).font(.system(.title2, design: .serif)).lineLimit(2).minimumScaleFactor(0.8)
+                            Text(anime.genres.prefix(2).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer(minLength: 0)
                             HStack {
                                 NavigationLink { AnimeDetailView(anime: anime) } label: { Label("View anime", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 7) }.buttonStyle(.borderedProminent)
                                 Button { store.toggleSaved(anime) } label: {
                                     Image(systemName: store.state.library.contains(where: { $0.id == anime.id }) ? "checkmark" : "plus").frame(width: 44, height: 44)
                                 }.buttonStyle(.bordered).accessibilityLabel("Toggle saved title")
                             }
-                        }.padding(22).foregroundStyle(.white)
-                    }.tag(rank)
+                        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                    }.background(Theme.surface).tag(rank)
                 }
-            }.tabViewStyle(.page(indexDisplayMode: .never)).frame(height: 355)
+            }.tabViewStyle(.page(indexDisplayMode: .never)).frame(height: 410)
                 .simultaneousGesture(DragGesture(minimumDistance: 15).onChanged { _ in paused = true })
             HStack {
                 Button { paused = true; move(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("Previous trending anime")

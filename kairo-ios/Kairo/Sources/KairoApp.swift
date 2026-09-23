@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @main struct KairoApp: App {
+    @AppStorage("appearance") private var appearance: AppAppearance = .system
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store: AppStore
     @StateObject private var downloads: DownloadManager
@@ -21,9 +22,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         WindowGroup {
             RootView().environmentObject(store).environmentObject(downloads)
                 .tint(Theme.purple)
+                .preferredColorScheme(appearance.colorScheme)
                 .alert("Storage needs attention", isPresented: Binding(get: { store.storageError != nil }, set: { if !$0 { store.storageError = nil } })) {
                     Button("OK") { store.storageError = nil }
                 } message: { Text(store.storageError ?? "") }
+        }
+    }
+}
+
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
         }
     }
 }
@@ -50,9 +65,23 @@ struct RootView: View {
 struct Artwork: View {
     let url: URL?
     var body: some View {
-        AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: {
-            LinearGradient(colors: [Theme.purple.opacity(0.5), .indigo.opacity(0.8)], startPoint: .topTrailing, endPoint: .bottomLeading)
-                .overlay { Image(systemName: "sparkles.tv").font(.largeTitle).foregroundStyle(.white.opacity(0.6)) }
+        GeometryReader { geometry in
+            AsyncImage(url: url) { phase in
+                ZStack {
+                    LinearGradient(colors: [Theme.purple.opacity(0.25), .indigo.opacity(0.35)], startPoint: .topTrailing, endPoint: .bottomLeading)
+                    if let image = phase.image {
+                        // The backdrop fills spare space; the foreground always shows
+                        // the complete artwork, whether it is a banner or a poster.
+                        image.resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped().blur(radius: 24).opacity(0.25)
+                        image.resizable().scaledToFit()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else {
+                        Image(systemName: "sparkles.tv").font(.title2).foregroundStyle(Theme.purple)
+                    }
+                }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
+            }
         }.accessibilityHidden(true)
     }
 }

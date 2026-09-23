@@ -75,11 +75,19 @@ struct DownloadsView: View {
 
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
+    @AppStorage("appearance") private var appearance: AppAppearance = .system
     @State private var sourceLink = ""
     @State private var manifestMessage: String?
     @State private var inspecting = false
     var body: some View {
         Form {
+            Section {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
+                }.pickerStyle(.segmented)
+            } header: { Text("Appearance") } footer: {
+                Text("System follows your device's appearance. Your selection is saved automatically.")
+            }
             Section {
                 Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
                 Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
