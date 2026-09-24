@@ -79,6 +79,7 @@ struct DownloadsView: View {
 }
 
 struct SourcesView: View {
+    @ObservedObject private var registry = ModuleRegistry.shared
     @EnvironmentObject private var store: AppStore
     @AppStorage("appearance") private var appearance: AppAppearance = .system
     @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
@@ -111,15 +112,36 @@ struct SourcesView: View {
             Section {
                 Picker("Browse in Discover", selection: $discoverySource) {
                     ForEach(DiscoverySource.allCases) { source in Text(source.name).tag(source.rawValue) }
+                    ForEach(registry.modules) { source in Text(source.name).tag(source.id) }
                 }
             } header: { Text("Discover source") } footer: {
-                Text("Animex shows its catalog. AniList shows its popular titles. Playback still needs a matching title on the enabled Animex source.")
+                Text("Animex shows its catalog. AniList shows its popular titles. Installed sources use their own search, episode lists and streams.")
             }
             Section {
                 TextField("https://…/source.json", text: $sourceLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                Button(inspecting ? "Inspecting…" : "Inspect source link") { Task { await inspect() } }.disabled(inspecting || sourceLink.isEmpty)
+                Button(inspecting ? "Installing…" : "Add source") { Task { await inspect() } }.disabled(inspecting || sourceLink.isEmpty)
                 if let manifestMessage { Text(manifestMessage).font(.caption) }
-            } header: { Text("Library source links") } footer: { Text("This build can inspect a manifest. Running additional community JavaScript modules is not implemented yet; a link will not be shown as an installed working source.") }
+            } header: { Text("Library source links") } footer: { Text("Paste a Luna/Sora JSON manifest. Compatible modules are installed on this device. Add the same link again to update. Modules contact their own websites and may send usage data to their authors.") }
+            if let storageError = registry.storageError { Text(storageError).font(.caption) }
+            if !registry.modules.isEmpty {
+                Section("Installed sources") {
+                    ForEach(registry.modules) { module in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(module.name)
+                                Text("Version \(module.version)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Remove", role: .destructive) {
+                                do {
+                                    try registry.remove(module.id)
+                                    if discoverySource == module.id { discoverySource = DiscoverySource.animex.rawValue }
+                                } catch { manifestMessage = error.localizedDescription }
+                            }
+                        }
+                    }
+                }
+            }
             Section("Playback") {
                 Picker("Preferred audio", selection: Binding(get: { store.state.preferences.audio }, set: { store.state.preferences.audio = $0; store.save() })) {
                     ForEach(AudioChoice.allCases) { Text($0.label).tag($0) }
@@ -138,12 +160,10 @@ struct SourcesView: View {
         inspecting = true; manifestMessage = nil
         defer { inspecting = false }
         do {
-            var request = URLRequest(url: url); request.timeoutInterval = 15
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200, data.count < 1_000_000,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let name = json["sourceName"] as? String, json["scriptUrl"] is String else { throw KairoError.message("This link did not return a supported source manifest.") }
-            manifestMessage = "Found \(name), version \(json["version"] as? String ?? "unknown"). Its JavaScript was not downloaded or executed. Use the built-in Animex adapter for the first device test."
+            let module = try await registry.install(url)
+            discoverySource = module.id
+            manifestMessage = "Installed \(module.name) \(module.version). Open Discover to browse or search this source."
+            sourceLink = ""
         } catch { manifestMessage = error.localizedDescription }
     }
 }

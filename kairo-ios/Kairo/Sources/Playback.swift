@@ -135,7 +135,7 @@ final class PlaybackController: ObservableObject {
     }
     @MainActor func playNext(store: AppStore) async {
         guard let request = active, !isPreparing, !isSwitchingAudio else { return }
-        let episode = request.episode + 1
+        let episode = request.anime.moduleEpisodes?.first(where: { $0.number > request.episode })?.number ?? (request.episode + 1)
         guard request.anime.episodeCount.map({ episode <= $0 }) ?? false else { return }
         let audio = request.audio ?? store.state.preferences.audio
         isPreparing = true
@@ -144,7 +144,7 @@ final class PlaybackController: ObservableObject {
                 try Task.checkCancellation()
                 await open(PlaybackRequest(anime: request.anime, episode: episode, localURL: saved.localURL, localAudio: saved.audio), store: store)
             } else {
-                guard store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to stream the next episode, or download its selected language first.") }
+                guard request.anime.moduleID != nil || store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to stream the next episode, or download its selected language first.") }
                 let options = try await CatalogAPI.shared.streams(request.anime, episode: episode, audio: audio)
                 try Task.checkCancellation()
                 guard let choice = options.first(where: { $0.provider == request.stream?.provider }) ?? options.first else {
@@ -165,7 +165,7 @@ final class PlaybackController: ObservableObject {
             if let saved = store.readyDownload(request.anime, episode: request.episode, audio: audio) {
                 replacement = PlaybackRequest(anime: request.anime, episode: request.episode, localURL: saved.localURL, localAudio: audio)
             } else {
-                guard store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to check this language online.") }
+                guard request.anime.moduleID != nil || store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to check this language online.") }
                 let options = try await CatalogAPI.shared.streams(request.anime, episode: request.episode, audio: audio)
                 guard let stream = options.first(where: { $0.provider == request.stream?.provider }) ?? options.first else {
                     throw KairoError.message("No provider offers \(audio.label) for this episode.")

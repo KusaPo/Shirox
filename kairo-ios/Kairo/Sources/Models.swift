@@ -20,7 +20,10 @@ struct Anime: Codable, Identifiable, Hashable {
     var episodeCount: Int?
     var year: Int?
     var genres: [String] = []
-    var id: String { anilistID.map { "anilist:\($0)" } ?? "animex:\(sourceID ?? title)" }
+    var moduleID: String?
+    var moduleName: String?
+    var moduleEpisodes: [ModuleEpisode]?
+    var id: String { if let moduleID { return "\(moduleID):\(sourceID ?? title)" }; return anilistID.map { "anilist:\($0)" } ?? "animex:\(sourceID ?? title)" }
 }
 
 struct StreamOption: Identifiable {

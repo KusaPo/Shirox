@@ -132,6 +132,7 @@ actor CatalogAPI {
     }
 
     func resolve(_ anime: Anime) async throws -> Anime {
+        if anime.moduleID != nil { return try await ModuleCatalog.shared.resolve(anime) }
         if let slug = anime.sourceID, !slug.isEmpty { return anime }
         let candidates = try await search(anime.title)
         var match = candidates.first { $0.anilistID != nil && $0.anilistID == anime.anilistID }
@@ -147,7 +148,8 @@ actor CatalogAPI {
     }
 
     func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
-        try await withThrowingTaskGroup(of: [StreamOption].self) { group in
+        if anime.moduleID != nil { return try await ModuleCatalog.shared.streams(anime, episode: episode, audio: audio) }
+        return try await withThrowingTaskGroup(of: [StreamOption].self) { group in
             group.addTask { try await self.loadStreams(anime, episode: episode, audio: audio) }
             group.addTask {
                 try await Task.sleep(for: .seconds(45))

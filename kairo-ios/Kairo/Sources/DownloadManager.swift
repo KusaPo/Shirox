@@ -153,7 +153,11 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
 
     @MainActor private func prepare(_ item: DownloadRecord) async {
         do {
-            guard store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex in Sources before retrying this download.") }
+            if let moduleID = item.anime.moduleID {
+                let module = try ModuleRegistry.shared.module(moduleID)
+                guard module.downloads else { throw KairoError.message("This module does not support downloads.") }
+            }
+            guard item.anime.moduleID != nil || store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex in Sources before retrying this download.") }
             let options = try await CatalogAPI.shared.streams(item.anime, episode: item.episode, audio: item.audio)
             guard let stream = options.first(where: { item.provider == nil || $0.provider == item.provider }) else { throw KairoError.message("The selected provider is no longer available. Remove this queue item and select another provider.") }
             try Task.checkCancellation()

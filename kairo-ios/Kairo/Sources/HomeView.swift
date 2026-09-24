@@ -122,6 +122,7 @@ struct TrendingCarousel: View {
 }
 
 struct DiscoverView: View {
+    @ObservedObject private var registry = ModuleRegistry.shared
     @EnvironmentObject private var store: AppStore
     @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
     @State private var query = ""
@@ -137,9 +138,11 @@ struct DiscoverView: View {
     @State private var refresh = UUID()
     private let genres = ["All", "Action", "Adventure", "Comedy", "Drama", "Fantasy", "Mystery", "Romance", "Sci-Fi", "Slice of Life", "Sports"]
     private var source: DiscoverySource { DiscoverySource(rawValue: discoverySource) ?? .animex }
+    private var moduleSelected: Bool { discoverySource.hasPrefix("module:") }
+    private var sourceName: String { registry.modules.first(where: { $0.id == discoverySource })?.name ?? (moduleSelected ? "Removed source" : source.name) }
     private var searching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var displayed: [Anime] {
-        guard searching else { return items }
+        guard searching && !moduleSelected else { return items }
         let matches = genre == "All" ? items : items.filter { $0.genres.contains(genre) }
         switch order {
         case .popular: return matches
@@ -149,16 +152,16 @@ struct DiscoverView: View {
     }
     var body: some View {
         ScrollView {
-            if source == .animex && !store.state.preferences.animexEnabled {
+            if !moduleSelected && source == .animex && !store.state.preferences.animexEnabled {
                 ContentUnavailableView("Animex is disabled", systemImage: "square.stack.3d.up", description: Text("Enable it in Sources & preferences to browse or watch."))
             } else {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack {
-                        Text(searching ? "Search results" : source.browseTitle).font(.title2.bold())
+                        Text(searching ? "Search results" : (moduleSelected ? "Explore \(sourceName)" : source.browseTitle)).font(.title2.bold())
                         Spacer()
                         Text("\(displayed.count) titles").font(.caption).foregroundStyle(.secondary)
                     }
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    if !moduleSelected { ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
                             Menu {
                                 Picker("Sort", selection: $order) {
@@ -171,6 +174,7 @@ struct DiscoverView: View {
                                 }
                             } label: { Label(genre == "All" ? "All genres" : genre, systemImage: "line.3.horizontal.decrease") }
                         }.buttonStyle(.bordered).controlSize(.small)
+                    }
                     }
                     if let note, !searching { Text(note).font(.caption).foregroundStyle(.secondary) }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 12)], spacing: 20) {
@@ -204,15 +208,16 @@ struct DiscoverView: View {
                 }.padding(16)
             }
         }
-        .navigationTitle("Discover").searchable(text: $query, prompt: "Search \(source.name)")
+        .navigationTitle("Discover").searchable(text: $query, prompt: "Search \(sourceName)")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
                     Picker("Browse source", selection: $discoverySource) {
                         ForEach(DiscoverySource.allCases) { source in Text(source.name).tag(source.rawValue) }
+                        ForEach(registry.modules) { source in Text(source.name).tag(source.id) }
                     }
-                } label: { HStack(spacing: 3) { Text(source.name); Image(systemName: "chevron.down").font(.caption2) }.font(.subheadline.weight(.semibold)) }
-                    .accessibilityLabel("Browse source: \(source.name)")
+                } label: { HStack(spacing: 3) { Text(sourceName); Image(systemName: "chevron.down").font(.caption2) }.font(.subheadline.weight(.semibold)) }
+                    .accessibilityLabel("Browse source: \(sourceName)")
             }
             SourceToolbar()
         }
@@ -220,7 +225,7 @@ struct DiscoverView: View {
         .task(id: "\(query)|\(discoverySource)|\(order.rawValue)|\(genre)|\(refresh)|\(store.state.preferences.animexEnabled)") {
             generation = UUID(); let current = generation
             items = []; error = nil; note = nil; page = 1; hasMore = false; busy = false
-            guard source != .animex || store.state.preferences.animexEnabled else { return }
+            guard moduleSelected || source != .animex || store.state.preferences.animexEnabled else { return }
             if searching { try? await Task.sleep(for: .milliseconds(350)) }
             guard !Task.isCancelled else { return }
             await loadMore(current)
@@ -232,7 +237,12 @@ struct DiscoverView: View {
         busy = true; error = nil
         let next = page
         do {
-            if searching {
+            if moduleSelected {
+                let found = try await ModuleCatalog.shared.search(query.trimmingCharacters(in: .whitespacesAndNewlines), sourceID: discoverySource)
+                guard current == generation, !Task.isCancelled else { return }
+                items = found; hasMore = false
+                note = found.isEmpty ? "This module has no browse feed. Search for an anime above." : "Titles returned by this source. This module format supports search but does not provide paginated recommendations."
+            } else if searching {
                 let found = try await CatalogAPI.shared.search(query.trimmingCharacters(in: .whitespacesAndNewlines), source: source)
                 guard current == generation, !Task.isCancelled else { return }
                 items = found; hasMore = false

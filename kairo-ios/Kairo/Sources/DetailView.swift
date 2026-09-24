@@ -42,16 +42,16 @@ struct AnimeDetailView: View {
                 Text(title.title).font(.title.bold())
                 if !title.genres.isEmpty { Text(title.genres.prefix(3).joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary) }
                 HStack {
-                    Button { action = EpisodeAction(episode: initialEpisode, download: false) } label: {
+                    Button { action = EpisodeAction(episode: title.moduleEpisodes?.first(where: { $0.number >= initialEpisode })?.number ?? initialEpisode, download: false) } label: {
                         Label(store.progress(title, episode: initialEpisode) == nil ? "Watch episode \(initialEpisode)" : "Resume episode \(initialEpisode)", systemImage: "play.fill")
-                    }.buttonStyle(.borderedProminent).disabled(busy || resolved == nil || !store.state.preferences.animexEnabled)
+                    }.buttonStyle(.borderedProminent).disabled(busy || resolved == nil || (title.moduleID == nil && !store.state.preferences.animexEnabled))
                     Spacer()
                     Button { store.toggleSaved(title) } label: { Image(systemName: store.state.library.contains(where: { $0.id == title.id }) ? "bookmark.fill" : "bookmark") }.buttonStyle(.bordered).accessibilityLabel("Toggle saved title")
                 }
                 if !title.synopsis.isEmpty { Text(title.synopsis).font(.subheadline).foregroundStyle(.secondary) }
-                Label("Source: Animex", systemImage: "square.stack.3d.up").font(.subheadline)
+                Label("Source: \(title.moduleName ?? "Animex")", systemImage: "square.stack.3d.up").font(.subheadline)
             }
-            if busy { ProgressView("Matching this title to Animex…") }
+            if busy { ProgressView("Loading source episodes…") }
             if let error { ProblemView(message: error) { reload = UUID() } }
             if resolved != nil {
                 Section {
@@ -62,7 +62,9 @@ struct AnimeDetailView: View {
                             Button("Retry") { metadataRetry = UUID() }.font(.caption)
                         }
                     }
-                    if let count = title.episodeCount, count > 0 {
+                    if let episodes = title.moduleEpisodes {
+                        ForEach(episodes, id: \.number) { episode in episodeRow(episode.number) }
+                    } else if let count = title.episodeCount, count > 0 {
                         if pageCount > 1 {
                             Picker("Episode range", selection: $episodePage) {
                                 ForEach(1...pageCount, id: \.self) { page in
@@ -89,6 +91,13 @@ struct AnimeDetailView: View {
         .task(id: "\(title.id)|\(title.malID ?? 0)|\(metadataPage)|\(metadataRetry)") {
             episodeDetails = [:]; metadataNotice = nil; metadataBusy = true
             do {
+                if title.moduleID != nil {
+                    let episodes = try await ModuleCatalog.shared.episodes(title)
+                    try Task.checkCancellation()
+                    episodeDetails = Dictionary(uniqueKeysWithValues: episodes.map { ($0.number, $0.metadata) })
+                    metadataBusy = false
+                    return
+                }
                 let details = try await EpisodeMetadataAPI.shared.episodes(for: title, page: metadataPage)
                 try Task.checkCancellation()
                 episodeDetails = details.episodes
@@ -105,7 +114,7 @@ struct AnimeDetailView: View {
             busy = true; error = nil
             defer { busy = false }
             do {
-                guard store.state.preferences.animexEnabled else { throw KairoError.message("Animex is disabled. Enable it in Sources to find episodes.") }
+                guard anime.moduleID != nil || store.state.preferences.animexEnabled else { throw KairoError.message("Animex is disabled. Enable it in Sources to find episodes.") }
                 resolved = try await CatalogAPI.shared.resolve(anime)
             } catch is CancellationError { }
             catch { self.error = error.localizedDescription }
@@ -119,7 +128,7 @@ struct AnimeDetailView: View {
             StreamPicker(anime: title, episode: selection.episode, forDownload: selection.download) { stream, batch in
                 if selection.download {
                     let last = min(selection.episode + (batch ? 2 : 0), title.episodeCount ?? selection.episode)
-                    for number in selection.episode...max(selection.episode, last) {
+                    for number in selection.episode...max(selection.episode, last) where title.moduleEpisodes == nil || title.moduleEpisodes!.contains(where: { $0.number == number }) {
                         downloads.enqueue(title, episode: number, audio: stream.audio, provider: stream.provider)
                     }
                     pendingQueued = true
