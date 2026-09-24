@@ -87,11 +87,11 @@ final class ModuleRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendab
 }
 
 enum ModuleNetwork {
-    static func read(_ url: URL, method: String = "GET", headers: [String: String] = [:], body: String? = nil) async throws -> (Data, HTTPURLResponse) {
+    static func read(_ url: URL, method: String = "GET", headers: [String: String] = [:], body: String? = nil, configuration: URLSessionConfiguration? = nil) async throws -> (Data, HTTPURLResponse) {
         guard WebAddress.media(url.absoluteString) != nil, ["GET", "POST", "HEAD"].contains(method), (body?.utf8.count ?? 0) <= 1_000_000 else {
             throw KairoError.message("This module requested an unsupported network operation.")
         }
-        let config = URLSessionConfiguration.ephemeral
+        let config = configuration ?? URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false; config.httpCookieStorage = nil; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 20; config.timeoutIntervalForResource = 30
         let session = URLSession(configuration: config, delegate: ModuleRedirects(), delegateQueue: nil)
@@ -120,11 +120,13 @@ enum ModuleNetwork {
     private var deadline: Task<Void, Never>?
     private var requests: [UUID: Task<Void, Never>] = [:]
     private var requestCount = 0
+    private var networkConfiguration: URLSessionConfiguration?
     private var script = ""
     private var function = ""
     private var argument = ""
-    static func execute(script: String, function: String, argument: String, timeout: Double = 65) async throws -> String {
+    static func execute(script: String, function: String, argument: String, timeout: Double = 65, networkConfiguration: URLSessionConfiguration? = nil) async throws -> String {
         let runner = ModuleRunner()
+        runner.networkConfiguration = networkConfiguration
         return try await runner.run(script: script, function: function, argument: argument, timeout: timeout)
     }
     private func run(script: String, function: String, argument: String, timeout: Double) async throws -> String {
@@ -208,7 +210,7 @@ enum ModuleNetwork {
         requests[id] = Task { [weak self] in
             defer { self?.requests.removeValue(forKey: id) }
             do {
-                let (data, response) = try await ModuleNetwork.read(url, method: value["method"] as? String ?? "GET", headers: value["headers"] as? [String: String] ?? [:], body: value["body"] as? String)
+                let (data, response) = try await ModuleNetwork.read(url, method: value["method"] as? String ?? "GET", headers: value["headers"] as? [String: String] ?? [:], body: value["body"] as? String, configuration: self?.networkConfiguration)
                 let headers = response.allHeaderFields.reduce(into: [String: String]()) { $0[String(describing: $1.key).lowercased()] = String(describing: $1.value) }
                 replyHandler(["data": String(data: data, encoding: .utf8) ?? "", "status": response.statusCode, "headers": headers, "url": response.url?.absoluteString ?? text], nil)
             } catch { replyHandler(nil, error.localizedDescription) }
@@ -296,7 +298,7 @@ actor ModuleCatalog {
                   ["m3u8", "mp4", "m4v"].contains(url.pathExtension.lowercased()) else { return nil }
             let label = row["title"] as? String ?? row["quality"] as? String ?? module.name
             let language = ((row["audio"] as? String ?? "") + " " + label).lowercased()
-            let providedAudio: AudioChoice = language.contains("dub") || language.contains("english") ? .dub : .sub
+            let providedAudio: AudioChoice = language.contains("dub") ? .dub : .sub
             guard providedAudio == audio else { return nil }
             let headers = EpisodeImageResource(url: url, headers: row["headers"] as? [String: String] ?? object["headers"] as? [String: String] ?? [:]).headers
             return StreamOption(id: "\(module.id):\(index)", provider: label, url: url, headers: headers, audio: providedAudio, label: label,
