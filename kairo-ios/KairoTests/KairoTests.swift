@@ -2,7 +2,62 @@ import XCTest
 import AVFoundation
 @testable import Kairo
 
+private final class EpisodeImageTestProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let allowed = request.value(forHTTPHeaderField: "Referer") == "https://video.example.com/"
+            && request.value(forHTTPHeaderField: "User-Agent") == "KairoTest"
+        let response = HTTPURLResponse(url: request.url!, statusCode: allowed ? 200 : 403, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/png"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGNsd/vAwMDAxMDAwMDAAAAUnQHBHHjLggAAAABJRU5ErkJggg==")!
+        client?.urlProtocol(self, didLoad: allowed ? png : Data("Forbidden".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
+}
+
 final class KairoTests: XCTestCase {
+    func testEpisodeImageObjectKeepsHeadersWithItsURL() throws {
+        let row: [String: Any] = ["title": "Episode 3 - Arrival", "thumbnail": [
+            "url": "https://images.example.com/3.png", "headers": ["Referer": "https://video.example.com/", "User-Agent": "KairoTest"]]]
+        let metadata = try XCTUnwrap(EpisodeMetadata.streamingEpisode(row))
+        let resource = try XCTUnwrap(metadata.imageResource)
+        XCTAssertEqual(resource.request.value(forHTTPHeaderField: "Referer"), "https://video.example.com/")
+        XCTAssertEqual(resource.request.value(forHTTPHeaderField: "User-Agent"), "KairoTest")
+        let merged = EpisodeMetadata.merge([EpisodeMetadata(number: 3, title: "Title"), metadata])
+        XCTAssertEqual(merged[3]?.imageResource, resource)
+        let plain = EpisodeImageResource(url: resource.url)
+        XCTAssertNotEqual(plain.cacheKey, resource.cacheKey)
+        let same = EpisodeImageResource(url: resource.url, headers: ["referer": "https://video.example.com/", "user-agent": "KairoTest"])
+        XCTAssertEqual(same.cacheKey, resource.cacheKey)
+    }
+
+    func testImageLoaderSendsHeadersAndDoesNotShareProtectedCache() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [EpisodeImageTestProtocol.self]
+        let loader = EpisodeImageLoader(configuration: config)
+        let url = URL(string: "https://images.example.com/episode.png")!
+        let plain = EpisodeImageResource(url: url)
+        do { _ = try await loader.image(plain); XCTFail("A 403 response must fail") } catch { }
+        let protected = EpisodeImageResource(url: url, headers: ["Referer": "https://video.example.com/", "User-Agent": "KairoTest"])
+        let image = try await loader.image(protected)
+        XCTAssertEqual(image.size.width, 2)
+        do { _ = try await loader.image(plain); XCTFail("Protected cache must not satisfy the same URL without headers") } catch { }
+    }
+
+    func testImageRedirectDropsCredentialsOutsideOriginalHost() throws {
+        let original = EpisodeImageResource(url: URL(string: "https://images.example.com/a.png")!, headers: [
+            "Referer": "https://video.example.com/", "Authorization": "Bearer test", "Cookie": "session=test"]).request
+        let redirected = try XCTUnwrap(EpisodeImageRedirects.redirect(URLRequest(url: URL(string: "https://cdn.example.com/a.png")!), from: original))
+        XCTAssertNil(redirected.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(redirected.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertEqual(redirected.value(forHTTPHeaderField: "Referer"), "https://video.example.com/")
+        let sameHost = try XCTUnwrap(EpisodeImageRedirects.redirect(URLRequest(url: URL(string: "https://images.example.com/b.png")!), from: original))
+        XCTAssertEqual(sameHost.value(forHTTPHeaderField: "Authorization"), "Bearer test")
+        XCTAssertNil(EpisodeImageRedirects.redirect(URLRequest(url: URL(string: "http://images.example.com/a.png")!), from: original))
+    }
+
     func testDownloadsSortNumericallyRegardlessOfAddedTimeOrState() {
         let anime = Anime(title: "Example")
         let rows = [DownloadRecord(anime: anime, episode: 10, audio: .dub, state: .ready),

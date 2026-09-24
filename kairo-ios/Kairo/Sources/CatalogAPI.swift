@@ -172,11 +172,14 @@ actor CatalogAPI {
             do {
                 let response = try await request(endpoint("sources", query: ["id": slug, "epNum": String(episode), "type": audio.rawValue, "providerId": providerID]))
                 let headers = response["headers"] as? [String: String] ?? [:]
+                let episodePreview = EpisodeImageResource.parse(response["thumbnail"], headers: response["thumbnailHeaders"] as? [String: String] ?? [:])
+                    ?? EpisodeImageResource.parse(servers["thumbnail"], headers: servers["thumbnailHeaders"] as? [String: String] ?? [:])
                 for (index, source) in (response["sources"] as? [[String: Any]] ?? []).enumerated() {
                     guard let text = source["url"] as? String, let url = WebAddress.media(text) else { continue }
                     let ext = url.pathExtension.lowercased()
                     guard ["m3u8", "mp4", "m4v"].contains(ext) else { continue }
-                    streams.append(StreamOption(id: "\(providerID)-\(index)", provider: providerID, url: url, headers: headers, audio: audio, label: "\(providerID.uppercased()) · \(audio.label)"))
+                    let preview = EpisodeImageResource.parse(source["thumbnail"], headers: source["thumbnailHeaders"] as? [String: String] ?? [:]) ?? episodePreview
+                    streams.append(StreamOption(id: "\(providerID)-\(index)", provider: providerID, url: url, headers: headers, audio: audio, label: "\(providerID.uppercased()) · \(audio.label)", preview: preview))
                 }
             } catch is CancellationError { throw CancellationError() }
             catch { lastFailure = error }

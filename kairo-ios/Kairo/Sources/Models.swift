@@ -30,6 +30,7 @@ struct StreamOption: Identifiable {
     var headers: [String: String]
     var audio: AudioChoice
     var label: String
+    var preview: EpisodeImageResource? = nil
     var isHLS: Bool { url.pathExtension.lowercased() == "m3u8" }
 }
 

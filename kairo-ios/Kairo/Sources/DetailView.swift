@@ -144,7 +144,7 @@ struct AnimeDetailView: View {
                 } else { action = EpisodeAction(episode: episode, download: false) }
             } label: {
                 HStack(spacing: 12) {
-                    EpisodeThumbnail(url: episodeDetails[episode]?.thumbnail,
+                    EpisodeThumbnail(resource: episodeDetails[episode]?.imageResource,
                                      anime: title, episode: episode,
                                      localURL: saved?.localURL)
                         .frame(width: 100, height: 100 * 9 / 16)
@@ -190,43 +190,38 @@ struct AnimeDetailView: View {
 }
 
 struct EpisodeThumbnail: View {
-    let url: URL?
+    let resource: EpisodeImageResource?
     let anime: Anime
     let episode: Int
     let localURL: URL?
     @State private var capturedFrame: UIImage?
-    private static let frames = NSCache<NSString, UIImage>()
     var body: some View {
         GeometryReader { geometry in
             if let capturedFrame {
                 Image(uiImage: capturedFrame).resizable().scaledToFill()
                     .frame(width: geometry.size.width, height: geometry.size.height).clipped()
             } else {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                    } else {
-                        ZStack {
+                ZStack {
                             LinearGradient(colors: [.black.opacity(0.8), Theme.purple.opacity(0.42)], startPoint: .topLeading, endPoint: .bottomTrailing)
                             VStack(spacing: 2) {
                                 Image(systemName: "play.rectangle").font(.caption)
                                 Text("EP \(episode)").font(.caption2.bold())
                             }.foregroundStyle(.white.opacity(0.8))
-                        }.frame(width: geometry.size.width, height: geometry.size.height)
-                    }
-                }
+                }.frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
-        .task(id: "\(anime.id)|\(episode)|\(url?.absoluteString ?? "")|\(localURL?.path ?? "")") {
+        .task(id: "\(anime.id)|\(episode)|\(resource?.cacheKey ?? "")|\(localURL?.path ?? "")") {
             capturedFrame = nil
-            guard url == nil else { return }
-            let key = "\(anime.id)-\(episode)" as NSString
-            if let cached = Self.frames.object(forKey: key) {
-                capturedFrame = cached; return
+            if let resource {
+                do {
+                    let image = try await EpisodeImageLoader.shared.image(resource)
+                    try Task.checkCancellation()
+                    capturedFrame = image
+                    return
+                } catch { if Task.isCancelled { return } }
             }
+            // A broken metadata image must not block source previews or frames.
             if let image = await EpisodePreviewService.shared.frame(anime: anime, episode: episode, localURL: localURL), !Task.isCancelled {
-                Self.frames.setObject(image, forKey: key)
                 capturedFrame = image
             }
         }.accessibilityHidden(true)
@@ -261,6 +256,14 @@ actor EpisodePreviewService {
             let stream: StreamOption?
             if localURL == nil {
                 let options = try await CatalogAPI.shared.streams(anime, episode: episode, audio: .sub)
+                var tried = Set<String>()
+                for preview in options.compactMap(\.preview) where tried.insert(preview.cacheKey).inserted {
+                    if let image = try? await EpisodeImageLoader.shared.image(preview) {
+                        frames.setObject(image, forKey: key)
+                        return image
+                    }
+                    try Task.checkCancellation()
+                }
                 // A direct video is more likely to support a frame at the
                 // midpoint than an HLS playlist without I-frame entries.
                 stream = options.first(where: { !$0.isHLS }) ?? options.first

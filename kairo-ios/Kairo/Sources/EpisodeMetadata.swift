@@ -1,9 +1,120 @@
 import Foundation
+import CryptoKit
+import UIKit
+import ImageIO
+
+struct EpisodeImageResource: Equatable, Hashable {
+    let url: URL
+    let headers: [String: String]
+
+    init(url: URL, headers: [String: String] = [:]) {
+        self.url = url
+        var sanitized: [String: String] = [:]
+        for (key, value) in headers.sorted(by: { $0.key < $1.key }) {
+            let name = key.lowercased()
+            guard !name.isEmpty, name.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-_").contains($0) }),
+                  !["host", "content-length", "connection"].contains(name),
+                  !value.contains("\r"), !value.contains("\n") else { continue }
+            sanitized[name] = value
+        }
+        self.headers = sanitized
+    }
+
+    static func parse(_ value: Any?, headers: [String: String] = [:]) -> EpisodeImageResource? {
+        if let text = value as? String, let url = WebAddress.media(text) {
+            return EpisodeImageResource(url: url, headers: headers)
+        }
+        guard let object = value as? [String: Any], let text = object["url"] as? String,
+              let url = WebAddress.media(text) else { return nil }
+        var merged = EpisodeImageResource(url: url, headers: headers).headers
+        let explicit = EpisodeImageResource(url: url, headers: object["headers"] as? [String: String] ?? [:]).headers
+        merged.merge(explicit) { _, new in new }
+        return EpisodeImageResource(url: url, headers: merged)
+    }
+
+    var request: URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        if request.value(forHTTPHeaderField: "Accept") == nil { request.setValue("image/*", forHTTPHeaderField: "Accept") }
+        return request
+    }
+    var cacheKey: String {
+        let values = [url.absoluteString] + headers.sorted { $0.key < $1.key }.flatMap { [$0.key, $0.value] }
+        let bytes = (try? JSONSerialization.data(withJSONObject: values)) ?? Data()
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// Headers belong to the requested image, never to the global network session.
+// Redirects may retain image presentation headers, but never forward credentials
+// to a different origin or downgrade to an insecure URL.
+final class EpisodeImageRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let original = task.originalRequest else { completionHandler(nil); return }
+        completionHandler(Self.redirect(request, from: original))
+    }
+    static func redirect(_ request: URLRequest, from original: URLRequest) -> URLRequest? {
+        guard let target = request.url, target.scheme?.lowercased() == "https", target.user == nil, target.password == nil else { return nil }
+        let sameOrigin = target.host?.lowercased() == original.url?.host?.lowercased()
+            && (target.port ?? 443) == (original.url?.port ?? 443)
+        var clean = request
+        clean.allHTTPHeaderFields = [:]
+        for (name, value) in original.allHTTPHeaderFields ?? [:] {
+            if sameOrigin || ["referer", "user-agent", "accept", "accept-language", "origin"].contains(name.lowercased()) {
+                clean.setValue(value, forHTTPHeaderField: name)
+            }
+        }
+        return clean
+    }
+}
+
+actor EpisodeImageLoader {
+    static let shared = EpisodeImageLoader()
+    private let session: URLSession
+    private let cache = NSCache<NSString, UIImage>()
+
+    init(configuration: URLSessionConfiguration = .ephemeral) {
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 18
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        session = URLSession(configuration: configuration, delegate: EpisodeImageRedirects(), delegateQueue: nil)
+        cache.totalCostLimit = 32 * 1024 * 1024
+        cache.countLimit = 120
+    }
+
+    func image(_ resource: EpisodeImageResource) async throws -> UIImage {
+        let key = resource.cacheKey as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let (data, response) = try await session.data(for: resource.request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              !data.isEmpty, data.count <= 10 * 1024 * 1024,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let frame = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 640
+              ] as CFDictionary) else { throw KairoError.message("Episode preview is unavailable.") }
+        let image = UIImage(cgImage: frame)
+        cache.setObject(image, forKey: key, cost: frame.bytesPerRow * frame.height)
+        return image
+    }
+}
 
 struct EpisodeMetadata: Equatable {
     var number: Int
     var title: String?
     var thumbnail: URL?
+    var thumbnailHeaders: [String: String] = [:]
+    var imageResource: EpisodeImageResource? {
+        thumbnail.map { EpisodeImageResource(url: $0, headers: thumbnailHeaders) }
+    }
 
     // Never assign by array position: providers can omit episodes or list them backwards.
     static func streamingEpisode(_ row: [String: Any]) -> EpisodeMetadata? {
@@ -14,8 +125,9 @@ struct EpisodeMetadata: Equatable {
               let number = Int(text[numberRange]), number > 0 else { return nil }
         let titleRange = Range(match.range(at: 2), in: text)
         let title = titleRange.map { String(text[$0]).trimmingCharacters(in: .whitespacesAndNewlines) }
+        let image = EpisodeImageResource.parse(row["thumbnail"], headers: row["thumbnailHeaders"] as? [String: String] ?? [:])
         return EpisodeMetadata(number: number, title: title?.isEmpty == false ? title : nil,
-                               thumbnail: (row["thumbnail"] as? String).flatMap(WebAddress.media))
+                               thumbnail: image?.url, thumbnailHeaders: image?.headers ?? [:])
     }
 
     static func jikanEpisode(_ row: [String: Any]) -> EpisodeMetadata? {
@@ -32,7 +144,7 @@ struct EpisodeMetadata: Equatable {
         for item in items {
             if var existing = result[item.number] {
                 existing.title = existing.title ?? item.title
-                existing.thumbnail = existing.thumbnail ?? item.thumbnail
+                if existing.thumbnail == nil { existing.thumbnail = item.thumbnail; existing.thumbnailHeaders = item.thumbnailHeaders }
                 result[item.number] = existing
             } else { result[item.number] = item }
         }

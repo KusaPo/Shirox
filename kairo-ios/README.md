@@ -49,6 +49,26 @@ To make the same IPA on a Mac with Xcode installed, run `bash kairo-ios/scripts/
 - Retrying an interrupted transfer with no surviving OS task resolves a fresh media link and starts again; it does not promise byte-level resume across changed URLs.
 - HLS download support on Simulator is not a substitute for device testing. No backend or proxy is deployed.
 
+## Episode-image contract
+
+Episode previews accept either a public HTTPS URL or an object containing `url` and `headers`:
+
+```json
+{
+  "thumbnail": {
+    "url": "https://images.example.com/episode-3.jpg",
+    "headers": {
+      "Referer": "https://video.example.com/",
+      "User-Agent": "Source-required user agent"
+    }
+  }
+}
+```
+
+Metadata and optional Animex episode/source response thumbnails preserve this object through to the native URLSession image loader. A plain thumbnail URL may also carry a sibling `thumbnailHeaders` dictionary. Only explicit image headers are attached: video headers are not copied to unrelated metadata image servers. Cache entries include both URL and headers; redirects do not forward credentials to another origin. Failed/forbidden image URLs now continue to source thumbnails and frame capture rather than blocking fallback. Episode rows keep their numbered placeholder if all preview paths fail.
+
+These lookups run when episode rows appear in a series detail page, not while browsing the library. Header support cannot invent an absent episode image or guarantee that an HLS video supports frame extraction. This is a native adapter contract, not a JavaScript module runtime.
+
 ## Device acceptance checklist
 
 Downloaded HLS packages stay at the location supplied by iOS. Kairo resolves filesystem aliases and the system's `/.nofollow/` path form before recording a container-relative path. Packages are used from Downloads inside Kairo; they are not exported as regular videos to Files or Photos. If a previous build saved a failed HLS location in an interrupted queue item, Kairo checks that package at startup and restores the episode only after confirming it is playable offline. If iOS removed the package or its offline check fails, retry the episode.
