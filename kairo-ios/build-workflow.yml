@@ -47,7 +47,9 @@ jobs:
       - name: Build and run unit tests
         run: |
           set -o pipefail
-          xcodebuild test -project kairo-ios/Kairo.xcodeproj -scheme Kairo -destination "platform=iOS Simulator,id=$KAIRO_TEST_DEVICE" -derivedDataPath /tmp/kairo-derived -resultBundlePath /tmp/KairoTests.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee /tmp/kairo-build.log
+          # WebKit bug 293831: Xcode 16.4/iOS 18.5 simulator lacks the pre-18.4 overlay.
+          # Override the simulator test build only; the device archive remains iOS 17+.
+          xcodebuild test -project kairo-ios/Kairo.xcodeproj -scheme Kairo -destination "platform=iOS Simulator,id=$KAIRO_TEST_DEVICE" -derivedDataPath /tmp/kairo-derived -resultBundlePath /tmp/KairoTests.xcresult CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=18.4 2>&1 | tee /tmp/kairo-build.log
       - name: Probe public source contracts
         if: always()
         continue-on-error: true
