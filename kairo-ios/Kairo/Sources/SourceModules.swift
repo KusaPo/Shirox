@@ -41,16 +41,22 @@ struct ModuleEpisode: Codable, Hashable {
         return module
     }
     func install(_ url: URL) async throws -> SourceModule {
-        let (data, _) = try await ModuleNetwork.read(url)
+        let (data, manifestResponse) = try await ModuleNetwork.read(url)
+        guard (200..<300).contains(manifestResponse.statusCode), data.count <= 1_000_000 else { throw KairoError.message("The manifest server returned HTTP \(manifestResponse.statusCode) or an oversized file.") }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let name = json["sourceName"] as? String, !name.isEmpty,
               let scriptText = json["scriptUrl"] as? String, let scriptURL = WebAddress.media(scriptText),
               let base = json["baseUrl"] as? String, let baseURL = WebAddress.media(base) else {
             throw KairoError.message("Use a Luna/Sora JSON manifest with sourceName, baseUrl and scriptUrl.")
         }
-        let (code, _) = try await ModuleNetwork.read(scriptURL)
+        let (code, scriptResponse) = try await ModuleNetwork.read(scriptURL)
+        guard (200..<300).contains(scriptResponse.statusCode) else { throw KairoError.message("The script server returned HTTP \(scriptResponse.statusCode).") }
         guard code.count <= 2_000_000, let script = String(data: code, encoding: .utf8) else { throw KairoError.message("The source script is too large or is not UTF-8 JavaScript.") }
-        _ = try await ModuleRunner.execute(script: script, function: "validate", argument: "", timeout: 15)
+        let validation = try await ModuleRunner.execute(script: script, function: "validate", argument: "", timeout: 15)
+        let functions = try JSONDecoder().decode([String].self, from: Data(validation.utf8))
+        guard Set(functions) == Set(["searchResults", "extractDetails", "extractEpisodes", "extractStreamUrl"]) else {
+            throw KairoError.message("This script does not expose the supported Luna/Sora source interface.")
+        }
         let id = "module:" + SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
         let module = SourceModule(id: id, manifestURL: url, name: name, version: json["version"] as? String ?? "Unknown", baseURL: baseURL, script: script, downloads: json["downloadSupport"] as? Bool ?? false)
         var next = modules.filter { $0.id != id }; next.append(module)
@@ -147,7 +153,7 @@ enum ModuleNetwork {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { finish(.failure(error)) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { finish(.failure(KairoError.message("The source script stopped unexpectedly."))) }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        let code = Self.bridge + "\n" + script + "\n" + """
+        let code = "try {\n" + Self.bridge + "\n" + script + "\n" + """
         const api = {
           searchResults: typeof searchResults === 'function' ? searchResults : null,
           extractDetails: typeof extractDetails === 'function' ? extractDetails : null,
@@ -165,17 +171,23 @@ enum ModuleNetwork {
         const output = JSON.stringify(value);
         if (!output || output.length > 4000000) throw new Error('Invalid or oversized module result');
         return output;
+        } catch (error) { return JSON.stringify({__kairoError:String(error.message || error)}); }
         """
-        webView.callAsyncJavaScript(code, arguments: ["operation": function, "input": argument], in: nil, contentWorld: .page) { [weak self] result in
+        webView.callAsyncJavaScript(code, arguments: ["operation": function, "input": argument], in: nil, in: .page, completionHandler: { [weak self] result in
             switch result {
             case .success(let value):
-                if let text = value as? String { self?.finish(.success(text)) }
+                if let text = value as? String {
+                    if let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let message = object["__kairoError"] as? String {
+                        self?.finish(.failure(KairoError.message(message)))
+                    } else { self?.finish(.success(text)) }
+                }
                 else { self?.finish(.failure(KairoError.message("The module returned an unsupported value."))) }
             case .failure(let error):
                 let ns = error as NSError
                 self?.finish(.failure(KairoError.message("Source script: \(ns.userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription)")))
             }
-        }
+        })
     }
     private func finish(_ result: Result<String, Error>) {
         guard let continuation else { return }
