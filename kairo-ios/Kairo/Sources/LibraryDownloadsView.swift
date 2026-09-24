@@ -1,0 +1,169 @@
+import SwiftUI
+
+struct LibraryView: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var filter = "All"
+    private var items: [Anime] {
+        store.state.library.filter { anime in
+            let started = store.state.progress.contains { $0.anime.id == anime.id }
+            return filter == "All" || (filter == "Watching" ? started : !started)
+        }
+    }
+    var body: some View {
+        List {
+            Picker("Collection", selection: $filter) { ForEach(["All", "Watching", "Watchlist"], id: \.self) { Text($0) } }.pickerStyle(.segmented)
+            if items.isEmpty { ContentUnavailableView("Your stories live here", systemImage: "bookmark", description: Text("Save a title or start an episode to add it to your library.")) }
+            ForEach(items) { anime in
+                NavigationLink { AnimeDetailView(anime: anime, initialEpisode: store.state.progress.filter { $0.anime.id == anime.id }.max(by: { $0.updated < $1.updated })?.episode ?? 1) } label: { AnimeRow(anime: anime) }
+                    .swipeActions { Button("Unsave", role: .destructive) { store.toggleSaved(anime) } }
+            }
+        }.navigationTitle("Your library").toolbar { SourceToolbar() }
+    }
+}
+
+struct DownloadsView: View {
+    @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var downloads: DownloadManager
+    @State private var playback: PlaybackRequest?
+    @State private var deletion: DownloadRecord?
+    private var titles: [Anime] {
+        var seen = Set<String>()
+        return store.state.downloads.map(\.anime).filter { seen.insert($0.id).inserted }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+    private var availableStorage: String {
+        let home = URL(fileURLWithPath: NSHomeDirectory())
+        guard let bytes = try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage else { return "Storage unavailable" }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) + " available"
+    }
+    var body: some View {
+        List {
+            Section {
+                Label(availableStorage, systemImage: "internaldrive")
+                Text("Up to two transfers at a time. Wi-Fi preference applies when each new transfer starts.").font(.caption).foregroundStyle(.secondary)
+            }
+            if store.state.downloads.isEmpty { ContentUnavailableView("Take a story with you", systemImage: "arrow.down.circle", description: Text("Open a title and tap the download button beside an episode.")) }
+            ForEach(titles) { anime in
+                Section(anime.title) {
+                    ForEach(store.state.downloads.filter { $0.anime.id == anime.id }.sorted(by: DownloadRecord.episodeOrder)) { item in row(item) }
+                }
+            }
+        }
+        .navigationTitle("Downloads")
+        .toolbar { SourceToolbar() }
+        .fullScreenCover(item: $playback) { PlayerScreen(request: $0) }
+        .confirmationDialog("Remove this download? Watch history will be kept.", isPresented: Binding(get: { deletion != nil }, set: { if !$0 { deletion = nil } }), titleVisibility: .visible) {
+            Button("Remove download", role: .destructive) { if let deletion { downloads.remove(deletion.id) }; deletion = nil }
+            Button("Cancel", role: .cancel) { deletion = nil }
+        }
+    }
+    private func row(_ item: DownloadRecord) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                AnimeRow(anime: item.anime, subtitle: "Episode \(item.episode) · \(item.audio.label)")
+                Spacer()
+                if item.state == .ready {
+                    Button { playback = PlaybackRequest(anime: item.anime, episode: item.episode, localURL: item.localURL, localAudio: item.audio) } label: { Image(systemName: "play.fill").frame(width: 44, height: 44) }.accessibilityLabel("Play downloaded episode")
+                } else if item.state == .downloading || item.state == .resolving || item.state == .queued {
+                    Button { downloads.pause(item.id) } label: { Image(systemName: "pause.fill").frame(width: 44, height: 44) }.accessibilityLabel("Pause download")
+                } else {
+                    Button { downloads.resume(item.id) } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }.accessibilityLabel("Resume or retry download")
+                }
+            }
+            if item.state == .downloading { ProgressView(value: item.fraction) }
+            Text(item.state == .ready ? "Available offline" : item.state.label).font(.caption).foregroundStyle(Theme.purple)
+            EpisodeWatchProgress(progress: store.progress(item.anime, episode: item.episode))
+            if let message = item.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }.swipeActions { Button("Remove", role: .destructive) { deletion = item } }
+    }
+}
+
+struct SourcesView: View {
+    @ObservedObject private var registry = ModuleRegistry.shared
+    @EnvironmentObject private var store: AppStore
+    @AppStorage("appearance") private var appearance: AppAppearance = .system
+    @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
+    @State private var sourceLink = ""
+    @State private var manifestMessage: String?
+    @State private var inspecting = false
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image("KairoLogo").resizable().scaledToFit().frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 13)).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("kairo").font(.title2.bold())
+                        Text("Your next adventure").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 4)
+            }
+            Section {
+                Picker("Appearance", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
+                }.pickerStyle(.segmented)
+            } header: { Text("Appearance") } footer: {
+                Text("System follows your device's appearance. Your selection is saved automatically.")
+            }
+            Section {
+                Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
+                Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
+            } header: { Text("Sources") }
+            Section {
+                Picker("Browse in Discover", selection: $discoverySource) {
+                    ForEach(DiscoverySource.allCases) { source in Text(source.name).tag(source.rawValue) }
+                    ForEach(registry.modules) { source in Text(source.name).tag(source.id) }
+                }
+            } header: { Text("Discover source") } footer: {
+                Text("Animex shows its catalog. AniList shows its popular titles. Installed sources use their own search, episode lists and streams.")
+            }
+            Section {
+                TextField("https://…/source.json", text: $sourceLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                Button(inspecting ? "Installing…" : "Add source") { Task { await inspect() } }.disabled(inspecting || sourceLink.isEmpty)
+                if let manifestMessage { Text(manifestMessage).font(.caption) }
+            } header: { Text("Library source links") } footer: { Text("Paste a Luna/Sora JSON manifest. Compatible modules are installed on this device. Add the same link again to update. Modules contact their own websites and may send usage data to their authors.") }
+            if let storageError = registry.storageError { Text(storageError).font(.caption) }
+            if !registry.modules.isEmpty {
+                Section("Installed sources") {
+                    ForEach(registry.modules) { module in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(module.name)
+                                Text("Version \(module.version)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Remove", role: .destructive) {
+                                do {
+                                    try registry.remove(module.id)
+                                    if discoverySource == module.id { discoverySource = DiscoverySource.animex.rawValue }
+                                } catch { manifestMessage = error.localizedDescription }
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Playback") {
+                Picker("Preferred audio", selection: Binding(get: { store.state.preferences.audio }, set: { store.state.preferences.audio = $0; store.save() })) {
+                    ForEach(AudioChoice.allCases) { Text($0.label).tag($0) }
+                }
+                Text("The native player provides subtitle, audio, AirPlay and picture-in-picture controls when the stream supports them.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Downloads") {
+                Toggle("Wi-Fi only for new transfers", isOn: Binding(get: { store.state.preferences.wifiOnly }, set: { store.state.preferences.wifiOnly = $0; store.save() }))
+                Text("Existing transfers retain their original network policy. Removing a download keeps your viewing history.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Your data") { Text("Your library, history and download records are saved on this device. Catalog searches contact AniList or the enabled source. Episode details also use MyAnimeList metadata through Jikan; media comes from the provider you select.").font(.caption) }
+        }.navigationTitle("Sources & preferences")
+    }
+    @MainActor private func inspect() async {
+        guard let url = WebAddress.media(sourceLink.trimmingCharacters(in: .whitespacesAndNewlines)) else { manifestMessage = "Enter a public HTTPS manifest link."; return }
+        inspecting = true; manifestMessage = nil
+        defer { inspecting = false }
+        do {
+            let module = try await registry.install(url)
+            discoverySource = module.id
+            manifestMessage = "Installed \(module.name) \(module.version). Open Discover to browse or search this source."
+            sourceLink = ""
+        } catch { manifestMessage = error.localizedDescription }
+    }
+}
