@@ -199,6 +199,8 @@ final class PlaybackController: ObservableObject {
 
 struct NativePlayer: UIViewControllerRepresentable {
     let player: AVPlayer
+    let nativeControls: Bool
+    let fill: Bool
     let onTap: () -> Void
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onTap: () -> Void
@@ -211,6 +213,8 @@ struct NativePlayer: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let view = AVPlayerViewController()
         view.player = player
+        view.showsPlaybackControls = nativeControls
+        view.videoGravity = fill ? .resizeAspectFill : .resizeAspect
         view.allowsPictureInPicturePlayback = true
         view.canStartPictureInPictureAutomaticallyFromInline = true
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTap))
@@ -221,8 +225,20 @@ struct NativePlayer: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
         uiViewController.player = player
+        uiViewController.showsPlaybackControls = nativeControls
+        uiViewController.videoGravity = fill ? .resizeAspectFill : .resizeAspect
         context.coordinator.onTap = onTap
     }
+}
+
+struct PlayerAirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.tintColor = .white
+        view.activeTintColor = .white
+        return view
+    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) { }
 }
 
 struct PlayerScreen: View {
@@ -236,17 +252,34 @@ struct PlayerScreen: View {
     @State private var transitionTask: Task<Void, Never>?
     @State private var controlsVisible = true
     @State private var hideControlsTask: Task<Void, Never>?
+    @State private var timeObserver: Any?
+    @State private var position = 0.0
+    @State private var duration = 0.0
+    @State private var scrubbing = false
+    @State private var isPlaying = false
+    @State private var fillVideo = false
+    @State private var nativeControls = false
+    @State private var speed = 1.0
+    private var current: PlaybackRequest { controller.active ?? request }
+    private var hasNext: Bool {
+        let next = current.anime.moduleEpisodes?.first(where: { $0.number > current.episode })?.number ?? current.episode + 1
+        return current.anime.episodeCount.map { next <= $0 } ?? false
+    }
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            NativePlayer(player: controller.player, onTap: toggleControls).ignoresSafeArea()
+            NativePlayer(player: controller.player, nativeControls: nativeControls, fill: fillVideo, onTap: toggleControls)
+                .ignoresSafeArea()
             if controller.isPreparing {
-                Color.black.ignoresSafeArea()
-                    .onTapGesture(perform: toggleControls)
+                Color.black.ignoresSafeArea().onTapGesture(perform: toggleControls)
                 ProgressView("Preparing episode…").tint(.white).foregroundStyle(.white)
             }
+            if !nativeControls && controlsVisible && !controller.isPreparing && controller.error == nil {
+                customControls.transition(.opacity)
+            }
             if let prompt = controller.skipPrompt, !controller.isPreparing {
-                VStack { Spacer(); HStack { Spacer(); Button(prompt.label) { controller.skipNow() }.buttonStyle(.borderedProminent).padding(24) } }
+                VStack { Spacer(); HStack { Spacer(); Button(prompt.label) { controller.skipNow() }
+                    .buttonStyle(.borderedProminent).padding(24) } }
             }
             if let error = controller.error {
                 VStack(spacing: 16) {
@@ -256,66 +289,153 @@ struct PlayerScreen: View {
                 }.padding(28).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22)).padding()
             }
         }
-        .overlay(alignment: .top) {
-            if controlsVisible {
-                HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark").font(.subheadline.bold())
-                        .frame(width: 38, height: 38)
-                        .background(.black.opacity(0.65), in: Circle())
-                }.accessibilityLabel("Close player")
-                Spacer()
+        .overlay(alignment: .top) { if controlsVisible { topControls.transition(.opacity) } }
+        .animation(.easeInOut(duration: 0.22), value: controlsVisible)
+        .preferredColorScheme(.dark)
+        .task { controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
+        .onAppear { startObserving() }
+        .alert("Audio unavailable", isPresented: Binding(get: { controller.audioNotice != nil }, set: { if !$0 { controller.audioNotice = nil } })) {
+            Button("OK", role: .cancel) { controller.audioNotice = nil }
+        } message: { Text(controller.audioNotice ?? "") }
+        .onChange(of: controller.isPreparing) { _, preparing in
+            if preparing { hideControlsTask?.cancel(); controlsVisible = true; position = 0; duration = 0 }
+            else { isPlaying = true; scheduleHideControls() }
+        }
+        .onChange(of: autoSkipIntro) { _, enabled in controller.autoSkip = enabled }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { controller.saveProgress() } }
+        .onDisappear {
+            transitionTask?.cancel(); hideControlsTask?.cancel()
+            if let timeObserver { controller.player.removeTimeObserver(timeObserver); self.timeObserver = nil }
+            controller.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
+            controller.saveProgress(finished: true)
+            isPlaying = false
+            if autoPlayNext { playNext() }
+        }
+    }
+    private var topControls: some View {
+        HStack(spacing: 12) {
+            Button { dismiss() } label: { Image(systemName: "xmark")
+                .font(.subheadline.bold()).frame(width: 40, height: 40)
+                .background(.black.opacity(0.65), in: Circle()) }
+                .accessibilityLabel("Close player")
+            Spacer(minLength: 8)
+            if nativeControls {
+                Button("Kairo controls") { nativeControls = false; scheduleHideControls() }
+                    .font(.caption.weight(.semibold)).padding(10).background(.black.opacity(0.65), in: Capsule())
+            } else {
+                PlayerAirPlayButton().frame(width: 40, height: 40)
+                    .background(.black.opacity(0.65), in: Circle())
+                    .accessibilityLabel("AirPlay")
                 Menu {
                     ForEach(AudioChoice.allCases) { choice in
                         Button {
                             transitionTask?.cancel()
                             transitionTask = Task { await controller.switchAudio(to: choice, store: store) }
                         } label: {
-                            if controller.active?.audio == choice { Label(choice.label, systemImage: "checkmark") }
+                            if current.audio == choice { Label(choice.label, systemImage: "checkmark") }
                             else { Text(choice.label) }
                         }
                     }
-                    Text("Undownloaded audio requires a connection.")
                 } label: {
-                    Text(controller.isSwitchingAudio ? "Checking…" : (controller.active?.audio ?? request.audio ?? store.state.preferences.audio).shortLabel)
-                        .font(.subheadline.bold()).padding(.horizontal, 12).frame(height: 38)
+                    Text(controller.isSwitchingAudio ? "Checking…" : (current.audio ?? store.state.preferences.audio).shortLabel)
+                        .font(.caption.bold()).frame(minWidth: 40, minHeight: 40)
                         .background(.black.opacity(0.65), in: Capsule())
                 }.disabled(controller.isPreparing || controller.isSwitchingAudio)
                     .accessibilityLabel("Sub or Dub audio")
                 Menu {
                     Toggle("Auto-play next episode", isOn: $autoPlayNext)
                     Toggle("Auto-skip intro and recap", isOn: $autoSkipIntro)
+                    Button("iOS controls (Picture in Picture and subtitles)") { nativeControls = true }
                 } label: {
                     Image(systemName: "gearshape.fill").font(.subheadline.bold())
-                        .frame(width: 38, height: 38)
-                        .background(.black.opacity(0.65), in: Circle())
+                        .frame(width: 40, height: 40).background(.black.opacity(0.65), in: Circle())
                 }.accessibilityLabel("Playback settings")
-                }
-                .foregroundStyle(.white)
-                .padding()
-                .transition(.opacity)
             }
-        }
-        .animation(.easeInOut(duration: 0.2), value: controlsVisible)
-        .task { controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
-        .alert("Audio unavailable", isPresented: Binding(get: { controller.audioNotice != nil }, set: { if !$0 { controller.audioNotice = nil } })) {
-            Button("OK", role: .cancel) { controller.audioNotice = nil }
-        } message: { Text(controller.audioNotice ?? "") }
-        .onChange(of: controller.isPreparing) { _, preparing in
-            if preparing { hideControlsTask?.cancel(); controlsVisible = true }
-            else { scheduleHideControls() }
-        }
-        .onChange(of: autoSkipIntro) { _, enabled in controller.autoSkip = enabled }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { controller.saveProgress() } }
-        .onDisappear { transitionTask?.cancel(); hideControlsTask?.cancel(); controller.stop() }
-        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
-            guard let item = notification.object as? AVPlayerItem, item === controller.player.currentItem else { return }
-            controller.saveProgress(finished: true)
-            if autoPlayNext {
-                transitionTask?.cancel()
-                transitionTask = Task { await controller.playNext(store: store) }
+        }.foregroundStyle(.white).padding()
+    }
+    private var customControls: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 38) {
+                controlButton("gobackward.10", label: "Back 10 seconds") { seek(position - 10) }
+                controlButton(isPlaying ? "pause.fill" : "play.fill", label: isPlaying ? "Pause" : "Play") {
+                    if isPlaying { controller.player.pause() }
+                    else { controller.player.play(); controller.player.rate = Float(speed) }
+                    isPlaying.toggle()
+                }.font(.system(size: 30, weight: .semibold))
+                controlButton("goforward.10", label: "Forward 10 seconds") { seek(position + 10) }
+            }.padding(16).background(.black.opacity(0.4), in: Capsule())
+            Spacer()
+            VStack(alignment: .leading, spacing: 10) {
+                Text("EPISODE \(current.episode)").font(.caption2.bold()).tracking(1.2).foregroundStyle(.white.opacity(0.7))
+                Text(current.anime.title).font(.headline).lineLimit(1)
+                HStack(spacing: 12) {
+                    Button { seek(position + 85) } label: { Label("85s", systemImage: "goforward") }
+                        .accessibilityLabel("Forward 85 seconds")
+                    Spacer()
+                    Button { fillVideo.toggle() } label: {
+                        Image(systemName: fillVideo ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    }.accessibilityLabel(fillVideo ? "Fit video" : "Fill screen")
+                    Menu {
+                        ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { value in
+                            Button(value == 1 ? "Normal" : "\(value.formatted())×") {
+                                speed = value
+                                if isPlaying { controller.player.rate = Float(value) }
+                            }
+                        }
+                    } label: { Text("\(speed.formatted())×") }.accessibilityLabel("Playback speed")
+                    if hasNext {
+                        Button { playNext() } label: { Image(systemName: "forward.end.fill") }
+                            .accessibilityLabel("Play next episode")
+                    }
+                }.font(.subheadline.weight(.semibold))
+                HStack(spacing: 8) {
+                    Text(timestamp(position)).monospacedDigit()
+                    Slider(value: $position, in: 0...max(duration, 1), onEditingChanged: { editing in
+                        scrubbing = editing
+                        if !editing { seek(position) }
+                        else { hideControlsTask?.cancel() }
+                    }).tint(Theme.purple)
+                        .accessibilityLabel("Playback position")
+                    Text(timestamp(duration)).monospacedDigit()
+                }.font(.caption2)
             }
+            .padding(18)
+            .background(LinearGradient(colors: [.clear, .black.opacity(0.88)], startPoint: .top, endPoint: .bottom))
+        }.foregroundStyle(.white)
+    }
+    private func controlButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).font(.system(size: 24, weight: .semibold))
+            .frame(width: 48, height: 48) }
+            .buttonStyle(.plain).accessibilityLabel(label)
+    }
+    private func startObserving() {
+        guard timeObserver == nil else { return }
+        timeObserver = controller.player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { _ in
+            let seconds = controller.player.currentTime().seconds
+            let length = controller.player.currentItem?.duration.seconds ?? 0
+            if !scrubbing, seconds.isFinite { position = max(0, seconds) }
+            if length.isFinite, length > 0 { duration = length }
+            if !controller.isPreparing { isPlaying = controller.player.rate > 0 }
         }
+    }
+    private func seek(_ seconds: Double) {
+        let target = min(max(0, seconds), max(duration, 0))
+        controller.player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        position = target
+        scheduleHideControls()
+    }
+    private func playNext() {
+        transitionTask?.cancel()
+        transitionTask = Task { await controller.playNext(store: store) }
+    }
+    private func timestamp(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let value = Int(min(seconds, 359999))
+        return String(format: "%d:%02d", value / 60, value % 60)
     }
     private func toggleControls() {
         hideControlsTask?.cancel()
@@ -326,7 +446,7 @@ struct PlayerScreen: View {
         hideControlsTask?.cancel()
         hideControlsTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
-            if !Task.isCancelled { controlsVisible = false }
+            if !Task.isCancelled && !scrubbing { controlsVisible = false }
         }
     }
 }
