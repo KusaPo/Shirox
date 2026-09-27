@@ -5,7 +5,8 @@ struct HomeView: View {
     @EnvironmentObject private var store: AppStore
     @State private var busy = false
     @State private var error: String?
-    @State private var detailTarget: WatchProgress?
+    @State private var detailTarget: Anime?
+    @State private var detailEpisode = 1
     @State private var playback: PlaybackRequest?
     var body: some View {
         ScrollView {
@@ -49,8 +50,8 @@ struct HomeView: View {
         .background(Theme.background)
         .navigationTitle("kairo").navigationBarTitleDisplayMode(.inline)
         .toolbar { SourceToolbar() }
-        .navigationDestination(item: $detailTarget) { progress in
-            AnimeDetailView(anime: progress.anime, initialEpisode: progress.episode)
+        .navigationDestination(item: $detailTarget) { anime in
+            AnimeDetailView(anime: anime, initialEpisode: detailEpisode)
         }
         .fullScreenCover(item: $playback) { PlayerScreen(request: $0) }
         .task { if store.state.trendingUpdated.map({ Date().timeIntervalSince($0) > 3600 }) ?? true { await load() } }
@@ -88,7 +89,10 @@ struct HomeView: View {
                         }.buttonStyle(.plain)
                             .accessibilityLabel("Continue \(progress.anime.title), episode \(progress.episode)")
                             .contextMenu {
-                                Button("Open title", systemImage: "list.bullet.rectangle") { detailTarget = progress }
+                                Button("Open title", systemImage: "list.bullet.rectangle") {
+                                    detailEpisode = progress.episode
+                                    detailTarget = progress.anime
+                                }
                             }
                     }
                 }.padding(.horizontal, 18)
@@ -99,7 +103,10 @@ struct HomeView: View {
         if let saved = store.readyDownload(progress.anime, episode: progress.episode, audio: store.state.preferences.audio) {
             playback = PlaybackRequest(anime: progress.anime, episode: progress.episode,
                 localURL: saved.localURL, localAudio: saved.audio)
-        } else { detailTarget = progress }
+        } else {
+            detailEpisode = progress.episode
+            detailTarget = progress.anime
+        }
     }
     @MainActor private func load() async {
         guard !busy else { return }
