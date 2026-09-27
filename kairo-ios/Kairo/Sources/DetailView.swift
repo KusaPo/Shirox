@@ -29,6 +29,7 @@ struct AnimeDetailView: View {
     @State private var metadataNotice: String?
     @State private var metadataRetry = UUID()
     @State private var initialized = false
+    @State private var synopsisExpanded = false
     private var title: Anime { resolved ?? anime }
     private var pageCount: Int { max(1, (min(title.episodeCount ?? 0, 5000) + 99) / 100) }
     private var visiblePage: Int { min(max(1, episodePage), pageCount) }
@@ -38,18 +39,10 @@ struct AnimeDetailView: View {
     var body: some View {
         List {
             Section {
-                AnimeArtwork(anime: title).aspectRatio(2.8, contentMode: .fit).clipped().listRowInsets(EdgeInsets())
-                Text(title.title).font(.title.bold())
-                if !title.genres.isEmpty { Text(title.genres.prefix(3).joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary) }
-                HStack {
-                    Button { action = EpisodeAction(episode: title.moduleEpisodes?.first(where: { $0.number >= initialEpisode })?.number ?? initialEpisode, download: false) } label: {
-                        Label(store.progress(title, episode: initialEpisode) == nil ? "Watch episode \(initialEpisode)" : "Resume episode \(initialEpisode)", systemImage: "play.fill")
-                    }.buttonStyle(.borderedProminent).disabled(busy || resolved == nil || (title.moduleID == nil && !store.state.preferences.animexEnabled))
-                    Spacer()
-                    Button { store.toggleSaved(title) } label: { Image(systemName: store.state.library.contains(where: { $0.id == title.id }) ? "bookmark.fill" : "bookmark") }.buttonStyle(.bordered).accessibilityLabel("Toggle saved title")
-                }
-                if !title.synopsis.isEmpty { Text(title.synopsis).font(.subheadline).foregroundStyle(.secondary) }
-                Label("Source: \(title.moduleName ?? "Animex")", systemImage: "square.stack.3d.up").font(.subheadline)
+                detailHeader
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
             if busy { ProgressView("Loading source episodes…") }
             if let error { ProblemView(message: error) { reload = UUID() } }
@@ -81,6 +74,9 @@ struct AnimeDetailView: View {
                 } header: { Text("Episodes") } footer: { Text("Episode previews come from episode-specific artwork or a frame captured from that episode. Streams that block frame capture show an episode placeholder. Titles come from AniList and MyAnimeList when available.") }
             }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Theme.background)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard !initialized else { return }
@@ -140,6 +136,63 @@ struct AnimeDetailView: View {
         }
         .fullScreenCover(item: $playback) { PlayerScreen(request: $0) }
         .alert("Added to Downloads", isPresented: $queued) { Button("OK", role: .cancel) {} } message: { Text("The queue will check the selected provider and prepare your offline file. Existing items are not duplicated.") }
+    }
+    private var detailHeader: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ZStack(alignment: .bottom) {
+                AnimeArtwork(anime: title)
+                    .frame(maxWidth: .infinity).frame(height: 260).clipped()
+                LinearGradient(colors: [.clear, Theme.background.opacity(0.7), Theme.background], startPoint: .top, endPoint: .bottom)
+            }
+            .frame(height: 260)
+            HStack(alignment: .bottom, spacing: 15) {
+                Artwork(url: title.cover).frame(width: 105, height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.3), radius: 12, y: 5)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(title.title).font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
+                    Text([title.year.map { String($0) }, title.episodeCount.map { "\($0) episodes" }].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(title.moduleName ?? "Animex").font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.purple)
+                }.padding(.bottom, 3)
+            }
+            .padding(.horizontal, 18).padding(.top, -76)
+            if !title.genres.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(title.genres.prefix(5), id: \.self) { genre in
+                            Text(genre).font(.caption.weight(.medium))
+                                .padding(.horizontal, 11).padding(.vertical, 6)
+                                .background(Theme.surface, in: Capsule())
+                        }
+                    }.padding(.horizontal, 18)
+                }
+            }
+            HStack(spacing: 12) {
+                Button {
+                    action = EpisodeAction(episode: title.moduleEpisodes?.first(where: { $0.number >= initialEpisode })?.number ?? initialEpisode, download: false)
+                } label: {
+                    Label(store.progress(title, episode: initialEpisode) == nil ? "Watch episode \(initialEpisode)" : "Resume episode \(initialEpisode)", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity).frame(height: 36)
+                }.buttonStyle(.borderedProminent)
+                    .disabled(busy || resolved == nil || (title.moduleID == nil && !store.state.preferences.animexEnabled))
+                Button { store.toggleSaved(title) } label: {
+                    Image(systemName: store.state.library.contains(where: { $0.id == title.id }) ? "bookmark.fill" : "bookmark")
+                        .frame(width: 38, height: 36)
+                }.buttonStyle(.bordered)
+                    .accessibilityLabel(store.state.library.contains(where: { $0.id == title.id }) ? "Remove saved title" : "Save title")
+            }.padding(.horizontal, 18)
+            if !title.synopsis.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Story").font(.headline)
+                    Text(title.synopsis).font(.subheadline).foregroundStyle(.secondary)
+                        .lineLimit(synopsisExpanded ? nil : 4)
+                    Button(synopsisExpanded ? "Show less" : "Read more") { synopsisExpanded.toggle() }
+                        .font(.caption.weight(.semibold))
+                }.padding(.horizontal, 18)
+            }
+        }.padding(.bottom, 14)
     }
     private func episodeRow(_ episode: Int) -> some View {
         let matching = store.state.downloads.filter { $0.anime.id == title.id && $0.episode == episode }

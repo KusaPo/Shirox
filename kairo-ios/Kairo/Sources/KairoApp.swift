@@ -51,14 +51,25 @@ enum Theme {
     static let surface = Color(uiColor: .secondarySystemGroupedBackground)
 }
 
+enum KairoTab: Hashable { case home, discover, library, downloads, settings }
+
 struct RootView: View {
+    @State private var selectedTab: KairoTab = .home
     var body: some View {
-        TabView {
-            NavigationStack { HomeView() }.tabItem { Label("Home", systemImage: "house") }
-            NavigationStack { DiscoverView() }.tabItem { Label("Discover", systemImage: "safari") }
-            NavigationStack { LibraryView() }.tabItem { Label("Library", systemImage: "bookmark") }
-            NavigationStack { DownloadsView() }.tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+        TabView(selection: $selectedTab) {
+            NavigationStack { HomeView(selectedTab: $selectedTab) }
+                .tabItem { Label("Home", systemImage: "house.fill") }.tag(KairoTab.home)
+            NavigationStack { DiscoverView() }
+                .tabItem { Label("Discover", systemImage: "magnifyingglass") }.tag(KairoTab.discover)
+            NavigationStack { LibraryView() }
+                .tabItem { Label("Library", systemImage: "books.vertical.fill") }.tag(KairoTab.library)
+            NavigationStack { DownloadsView() }
+                .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }.tag(KairoTab.downloads)
+            NavigationStack { SourcesView() }
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }.tag(KairoTab.settings)
         }
+        .toolbarBackground(.ultraThinMaterial, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
     }
 }
 

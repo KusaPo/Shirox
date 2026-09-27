@@ -3,10 +3,12 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var store: AppStore
     @State private var filter = "All"
+    @State private var search = ""
     private var items: [Anime] {
         store.state.library.filter { anime in
             let started = store.state.progress.contains { $0.anime.id == anime.id }
-            return filter == "All" || (filter == "Watching" ? started : !started)
+            let inCollection = filter == "All" || (filter == "Watching" ? started : !started)
+            return inCollection && (search.isEmpty || anime.title.localizedStandardContains(search))
         }
     }
     var body: some View {
@@ -17,7 +19,8 @@ struct LibraryView: View {
                 NavigationLink { AnimeDetailView(anime: anime, initialEpisode: store.state.progress.filter { $0.anime.id == anime.id }.max(by: { $0.updated < $1.updated })?.episode ?? 1) } label: { AnimeRow(anime: anime) }
                     .swipeActions { Button("Unsave", role: .destructive) { store.toggleSaved(anime) } }
             }
-        }.navigationTitle("Your library").toolbar { SourceToolbar() }
+        }.navigationTitle("Your library").searchable(text: $search, prompt: "Find a saved title")
+            .toolbar { SourceToolbar() }
     }
 }
 
