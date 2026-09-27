@@ -73,23 +73,46 @@ struct RootView: View {
     }
 }
 
+@MainActor final class ArtworkMemoryCache {
+    static let shared = ArtworkMemoryCache()
+    private let images = NSCache<NSURL, UIImage>()
+    init() { images.totalCostLimit = 80 * 1_024 * 1_024 }
+    func cached(_ url: URL) -> UIImage? { images.object(forKey: url as NSURL) }
+    func load(_ url: URL) async throws -> UIImage {
+        if let image = cached(url) { return image }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              data.count <= 12_000_000, let image = UIImage(data: data) else {
+            throw KairoError.message("Artwork could not be loaded.")
+        }
+        images.setObject(image, forKey: url as NSURL, cost: data.count)
+        return image
+    }
+    func clear() { images.removeAllObjects(); URLCache.shared.removeAllCachedResponses() }
+}
+
 struct Artwork: View {
     let url: URL?
     var contentMode: ContentMode = .fill
+    @State private var image: UIImage?
     var body: some View {
         GeometryReader { geometry in
-            AsyncImage(url: url) { phase in
-                ZStack {
-                    LinearGradient(colors: [Theme.purple.opacity(0.25), .indigo.opacity(0.35)], startPoint: .topTrailing, endPoint: .bottomLeading)
-                    if let image = phase.image {
-                        image.resizable().aspectRatio(contentMode: contentMode)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                    } else {
-                        Image(systemName: "sparkles.tv").font(.title2).foregroundStyle(Theme.purple)
-                    }
-                }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
-            }
-        }.accessibilityHidden(true)
+            ZStack {
+                LinearGradient(colors: [Theme.purple.opacity(0.25), .indigo.opacity(0.35)], startPoint: .topTrailing, endPoint: .bottomLeading)
+                if let image {
+                    Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                } else {
+                    Image(systemName: "sparkles.tv").font(.title2).foregroundStyle(Theme.purple)
+                }
+            }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
+        }
+        .task(id: url) {
+            image = url.flatMap { ArtworkMemoryCache.shared.cached($0) }
+            guard let url else { return }
+            image = try? await ArtworkMemoryCache.shared.load(url)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -113,12 +136,27 @@ struct AnimeArtwork: View {
     }
 }
 
+/// Keep a complete portrait cover visible while its blurred colors fill a differently shaped card.
+struct PosterArtwork: View {
+    let url: URL?
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Artwork(url: url).blur(radius: 14)
+                Color.black.opacity(0.16)
+                Artwork(url: url, contentMode: .fit)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
+        }.accessibilityHidden(true)
+    }
+}
+
 struct AnimeRow: View {
     let anime: Anime
     var subtitle: String?
     var body: some View {
         HStack(spacing: 14) {
-            Artwork(url: anime.cover).frame(width: 58, height: 82).clipShape(RoundedRectangle(cornerRadius: 10))
+            PosterArtwork(url: anime.cover).frame(width: 58, height: 82).clipShape(RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 5) {
                 Text(anime.title).font(.headline)
                 Text(subtitle ?? anime.genres.prefix(2).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)

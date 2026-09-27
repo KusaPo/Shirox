@@ -138,7 +138,7 @@ struct PosterShelf: View {
                     ForEach(items) { anime in
                         NavigationLink { AnimeDetailView(anime: anime) } label: {
                             VStack(alignment: .leading, spacing: 6) {
-                                Artwork(url: anime.cover).frame(width: 135, height: 194)
+                                PosterArtwork(url: anime.cover).frame(width: 135, height: 194)
                                     .clipShape(RoundedRectangle(cornerRadius: 13))
                                 Text(anime.title).font(.caption.weight(.semibold)).lineLimit(2)
                                     .frame(width: 135, height: 34, alignment: .topLeading)
@@ -284,7 +284,7 @@ struct DiscoverView: View {
                         ForEach(displayed) { anime in
                             NavigationLink { AnimeDetailView(anime: anime) } label: {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Artwork(url: anime.cover).aspectRatio(2.0 / 3.0, contentMode: .fit)
+                                    PosterArtwork(url: anime.cover).aspectRatio(2.0 / 3.0, contentMode: .fit)
                                         .clipShape(RoundedRectangle(cornerRadius: 13))
                                         .overlay(alignment: .bottomLeading) {
                                             if let year = anime.year {

@@ -86,6 +86,11 @@ struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
     @AppStorage("appearance") private var appearance: AppAppearance = .system
     @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
+    @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
+    @AppStorage("playerAutoSkipIntro") private var autoSkipIntro = false
+    @AppStorage("playerFillVideo") private var fillVideo = false
+    @AppStorage("playerSeekShort") private var shortSeek = 10
+    @AppStorage("playerSeekLong") private var longSeek = 85
     @State private var sourceLink = ""
     @State private var manifestMessage: String?
     @State private var inspecting = false
@@ -150,6 +155,18 @@ struct SourcesView: View {
                     ForEach(AudioChoice.allCases) { Text($0.label).tag($0) }
                 }
                 Text("The native player provides subtitle, audio, AirPlay and picture-in-picture controls when the stream supports them.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Auto-play next episode", isOn: $autoPlayNext)
+                Toggle("Auto-skip intro and recap", isOn: $autoSkipIntro)
+                Toggle("Fill player screen", isOn: $fillVideo)
+                Text("Fit shows the full video without cropping. Fill may crop the edges; you can change it in the player.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Stepper("Short seek: \(shortSeek) seconds", value: $shortSeek, in: 5...30, step: 5)
+                Stepper("Long seek: \(longSeek) seconds", value: $longSeek, in: 30...120, step: 5)
+            }
+            Section("Artwork cache") {
+                Button("Clear cached artwork") { ArtworkMemoryCache.shared.clear() }
+                Text("Artwork is cached during browsing to reduce reloads. Clearing it does not remove your library or downloads.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Downloads") {
                 Toggle("Wi-Fi only for new transfers", isOn: Binding(get: { store.state.preferences.wifiOnly }, set: { store.state.preferences.wifiOnly = $0; store.save() }))

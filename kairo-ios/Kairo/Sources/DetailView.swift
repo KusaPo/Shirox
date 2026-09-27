@@ -146,7 +146,7 @@ struct AnimeDetailView: View {
             }
             .frame(height: 260)
             HStack(alignment: .bottom, spacing: 15) {
-                Artwork(url: title.cover).frame(width: 105, height: 150)
+                PosterArtwork(url: title.cover).frame(width: 105, height: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .shadow(color: .black.opacity(0.3), radius: 12, y: 5)
                 VStack(alignment: .leading, spacing: 7) {

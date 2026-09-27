@@ -49,6 +49,8 @@ final class PlaybackController: ObservableObject {
     private var skipped = Set<Int>()
     private var observation: NSKeyValueObservation?
     private var timeToken: Any?
+    private var nextStreamTask: Task<[StreamOption]?, Never>?
+    private var nextStreamKey: String?
     @Published private(set) var active: PlaybackRequest?
     @Published var audioNotice: String?
     @Published private(set) var isSwitchingAudio = false
@@ -62,6 +64,7 @@ final class PlaybackController: ObservableObject {
         skipPrompt = nil
         intervals = []
         skipped = []
+        nextStreamTask?.cancel(); nextStreamTask = nil; nextStreamKey = nil
         if let timeToken { player.removeTimeObserver(timeToken); self.timeToken = nil }
         observation = nil
         self.store = store
@@ -105,6 +108,7 @@ final class PlaybackController: ObservableObject {
                     self.saveProgress(); self.lastProgressSave = Date()
                 }
                 self?.checkSkip()
+                self?.prefetchNextIfNeeded()
             }
             player.play()
             isPreparing = false
@@ -127,6 +131,22 @@ final class PlaybackController: ObservableObject {
             break
         }
     }
+    private func prefetchNextIfNeeded() {
+        guard let active, active.localURL == nil, let store, !isPreparing,
+              let duration = player.currentItem?.duration.seconds, duration.isFinite, duration > 0,
+              player.currentTime().seconds >= duration * 0.8 else { return }
+        let episode = active.anime.moduleEpisodes?.first(where: { $0.number > active.episode })?.number ?? active.episode + 1
+        guard active.anime.episodeCount.map({ episode <= $0 }) ?? false else { return }
+        let audio = active.audio ?? store.state.preferences.audio
+        guard store.readyDownload(active.anime, episode: episode, audio: audio) == nil else { return }
+        let key = "\(active.anime.id)|\(episode)|\(audio.rawValue)"
+        guard nextStreamKey != key else { return }
+        nextStreamKey = key
+        let anime = active.anime
+        nextStreamTask = Task {
+            try? await CatalogAPI.shared.streams(anime, episode: episode, audio: audio)
+        }
+    }
     func skipNow() {
         guard let interval = skipPrompt else { return }
         if let index = intervals.firstIndex(where: { $0.start == interval.start }) { skipped.insert(index) }
@@ -145,7 +165,11 @@ final class PlaybackController: ObservableObject {
                 await open(PlaybackRequest(anime: request.anime, episode: episode, localURL: saved.localURL, localAudio: saved.audio), store: store)
             } else {
                 guard request.anime.moduleID != nil || store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex to stream the next episode, or download its selected language first.") }
-                let options = try await CatalogAPI.shared.streams(request.anime, episode: episode, audio: audio)
+                let key = "\(request.anime.id)|\(episode)|\(audio.rawValue)"
+                let cached = key == nextStreamKey ? await nextStreamTask?.value : nil
+                let options: [StreamOption]
+                if let cached { options = cached }
+                else { options = try await CatalogAPI.shared.streams(request.anime, episode: episode, audio: audio) }
                 try Task.checkCancellation()
                 guard let choice = options.first(where: { $0.provider == request.stream?.provider }) ?? options.first else {
                     throw KairoError.message("The next episode has no playable stream.")
@@ -189,6 +213,7 @@ final class PlaybackController: ObservableObject {
     }
     func stop() {
         saveProgress()
+        nextStreamTask?.cancel(); nextStreamTask = nil; nextStreamKey = nil
         player.pause()
         if let timeToken { player.removeTimeObserver(timeToken); self.timeToken = nil }
         observation = nil
@@ -202,14 +227,22 @@ struct NativePlayer: UIViewControllerRepresentable {
     let nativeControls: Bool
     let fill: Bool
     let onTap: () -> Void
+    let onDoubleTap: (Bool) -> Void
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onTap: () -> Void
-        init(onTap: @escaping () -> Void) { self.onTap = onTap }
+        var onDoubleTap: (Bool) -> Void
+        init(onTap: @escaping () -> Void, onDoubleTap: @escaping (Bool) -> Void) {
+            self.onTap = onTap; self.onDoubleTap = onDoubleTap
+        }
         @objc func didTap() { onTap() }
+        @objc func didDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            onDoubleTap(recognizer.location(in: view).x < view.bounds.midX)
+        }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     }
-    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
+    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap, onDoubleTap: onDoubleTap) }
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let view = AVPlayerViewController()
         view.player = player
@@ -218,9 +251,15 @@ struct NativePlayer: UIViewControllerRepresentable {
         view.allowsPictureInPicturePlayback = true
         view.canStartPictureInPictureAutomaticallyFromInline = true
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTap))
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.cancelsTouchesInView = false
+        doubleTap.delegate = context.coordinator
+        tap.require(toFail: doubleTap)
         tap.cancelsTouchesInView = false
         tap.delegate = context.coordinator
         view.view.addGestureRecognizer(tap)
+        view.view.addGestureRecognizer(doubleTap)
         return view
     }
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
@@ -228,6 +267,7 @@ struct NativePlayer: UIViewControllerRepresentable {
         uiViewController.showsPlaybackControls = nativeControls
         uiViewController.videoGravity = fill ? .resizeAspectFill : .resizeAspect
         context.coordinator.onTap = onTap
+        context.coordinator.onDoubleTap = onDoubleTap
     }
 }
 
@@ -249,6 +289,9 @@ struct PlayerScreen: View {
     @StateObject private var controller = PlaybackController()
     @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
     @AppStorage("playerAutoSkipIntro") private var autoSkipIntro = false
+    @AppStorage("playerFillVideo") private var fillVideo = false
+    @AppStorage("playerSeekShort") private var shortSeek = 10
+    @AppStorage("playerSeekLong") private var longSeek = 85
     @State private var transitionTask: Task<Void, Never>?
     @State private var controlsVisible = true
     @State private var hideControlsTask: Task<Void, Never>?
@@ -257,7 +300,6 @@ struct PlayerScreen: View {
     @State private var duration = 0.0
     @State private var scrubbing = false
     @State private var isPlaying = false
-    @State private var fillVideo = false
     @State private var nativeControls = false
     @State private var speed = 1.0
     private var current: PlaybackRequest { controller.active ?? request }
@@ -268,7 +310,11 @@ struct PlayerScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            NativePlayer(player: controller.player, nativeControls: nativeControls, fill: fillVideo, onTap: toggleControls)
+            NativePlayer(player: controller.player, nativeControls: nativeControls, fill: fillVideo,
+                onTap: toggleControls, onDoubleTap: { left in
+                    guard !nativeControls, !controller.isPreparing else { return }
+                    seek(position + Double(left ? -shortSeek : shortSeek))
+                })
                 .ignoresSafeArea()
             if controller.isPreparing {
                 Color.black.ignoresSafeArea().onTapGesture(perform: toggleControls)
@@ -360,21 +406,21 @@ struct PlayerScreen: View {
         VStack {
             Spacer()
             HStack(spacing: 38) {
-                controlButton("gobackward.10", label: "Back 10 seconds") { seek(position - 10) }
+                controlButton("gobackward.10", label: "Back \(shortSeek) seconds") { seek(position - Double(shortSeek)) }
                 controlButton(isPlaying ? "pause.fill" : "play.fill", label: isPlaying ? "Pause" : "Play") {
                     if isPlaying { controller.player.pause() }
                     else { controller.player.play(); controller.player.rate = Float(speed) }
                     isPlaying.toggle()
                 }.font(.system(size: 30, weight: .semibold))
-                controlButton("goforward.10", label: "Forward 10 seconds") { seek(position + 10) }
+                controlButton("goforward.10", label: "Forward \(shortSeek) seconds") { seek(position + Double(shortSeek)) }
             }.padding(16).background(.black.opacity(0.4), in: Capsule())
             Spacer()
             VStack(alignment: .leading, spacing: 10) {
                 Text("EPISODE \(current.episode)").font(.caption2.bold()).tracking(1.2).foregroundStyle(.white.opacity(0.7))
                 Text(current.anime.title).font(.headline).lineLimit(1)
                 HStack(spacing: 12) {
-                    Button { seek(position + 85) } label: { Label("85s", systemImage: "goforward") }
-                        .accessibilityLabel("Forward 85 seconds")
+                    Button { seek(position + Double(longSeek)) } label: { Label("\(longSeek)s", systemImage: "goforward") }
+                        .accessibilityLabel("Forward \(longSeek) seconds")
                     Spacer()
                     Button { fillVideo.toggle() } label: {
                         Image(systemName: fillVideo ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
