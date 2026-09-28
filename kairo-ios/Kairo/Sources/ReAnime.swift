@@ -238,7 +238,7 @@ struct ReAnimePlayer: View {
                 selected = result.first { $0.audio == audio }
                 if selected == nil { error = "ReAnime returned no playable server." }
             } catch is CancellationError { }
-            catch { error = error.localizedDescription }
+            catch { self.error = error.localizedDescription }
             loading = false
         }
         .onChange(of: audio) { _, choice in selected = servers.first { $0.audio == choice }; playerError = nil; playerLoading = true }
