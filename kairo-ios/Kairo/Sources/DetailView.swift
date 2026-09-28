@@ -22,6 +22,7 @@ struct AnimeDetailView: View {
     @State private var reanimePlayback: ReAnimePlayback?
     @State private var reanimeAudio: [Int: Set<AudioChoice>] = [:]
     @State private var pendingPlayback: PlaybackRequest?
+    @State private var pendingReAnimePlayback: ReAnimePlayback?
     @State private var pendingQueued = false
     @State private var customEpisode = 1
     @State private var queued = false
@@ -133,6 +134,8 @@ struct AnimeDetailView: View {
         .sheet(item: $action, onDismiss: {
             playback = pendingPlayback
             pendingPlayback = nil
+            reanimePlayback = pendingReAnimePlayback
+            pendingReAnimePlayback = nil
             queued = pendingQueued
             pendingQueued = false
         }) { selection in
@@ -144,7 +147,12 @@ struct AnimeDetailView: View {
                     }
                     pendingQueued = true
                 } else {
-                    pendingPlayback = PlaybackRequest(anime: title, episode: selection.episode, stream: stream)
+                    if stream.isEmbedded {
+                        pendingReAnimePlayback = ReAnimePlayback(anime: title, episode: selection.episode,
+                                                                 audio: stream.audio, preferredServerID: stream.id)
+                    } else {
+                        pendingPlayback = PlaybackRequest(anime: title, episode: selection.episode, stream: stream)
+                    }
                 }
                 action = nil
             }
@@ -228,7 +236,7 @@ struct AnimeDetailView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Episode \(episode)").font(.subheadline.weight(.semibold))
                             if let name = episodeDetails[episode]?.title { Text(name).font(.caption).lineLimit(2) }
-                            Text("Watch in Kairo").font(.caption).foregroundStyle(.secondary)
+                            Text("Choose playback source").font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.buttonStyle(.plain)
@@ -304,7 +312,9 @@ struct AnimeDetailView: View {
         let available = reanimeAudio[episode] ?? [.sub, .dub]
         let preferred = audio ?? store.state.preferences.audio
         let choice = available.contains(preferred) ? preferred : (available.contains(.sub) ? .sub : .dub)
-        reanimePlayback = ReAnimePlayback(anime: title, episode: episode, audio: choice)
+        store.state.preferences.audio = choice
+        store.save()
+        action = EpisodeAction(episode: episode, download: false)
     }
 }
 
@@ -442,7 +452,7 @@ struct StreamPicker: View {
                     Section("Choose a provider") {
                         ForEach(streams) { stream in
                             Button { store.state.preferences.audio = audio; store.save(); choose(stream, batch) } label: {
-                                HStack { Label(stream.label, systemImage: forDownload ? "arrow.down.circle" : "play.circle"); Spacer(); Text(stream.isHLS ? "HLS" : "MP4").font(.caption).foregroundStyle(.secondary) }.padding(.vertical, 7)
+                                HStack { Label(stream.label, systemImage: forDownload ? "arrow.down.circle" : "play.circle"); Spacer(); Text(stream.isEmbedded ? "Player" : (stream.isHLS ? "HLS" : "MP4")).font(.caption).foregroundStyle(.secondary) }.padding(.vertical, 7)
                             }
                         }
                     }

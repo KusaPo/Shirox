@@ -163,6 +163,14 @@ actor ReAnimeAPI {
             return ReAnimeServer(id: row["$id"] as? String ?? "\(audio.rawValue)-\(name)", name: name, url: url, audio: audio)
         }
     }
+    func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
+        let listed = try await servers(anime, episode: episode).filter { $0.audio == audio }
+        guard !listed.isEmpty else { throw KairoError.message("ReAnime lists no \(audio.label) player for episode \(episode). Try the other language.") }
+        return listed.map { server in
+            StreamOption(id: server.id, provider: server.id, url: server.url, headers: [:], audio: audio,
+                         label: "ReAnime · \(server.name) · \(audio.shortLabel)")
+        }
+    }
 }
 
 struct ReAnimePlayback: Identifiable {
@@ -170,6 +178,7 @@ struct ReAnimePlayback: Identifiable {
     let anime: Anime
     let episode: Int
     let audio: AudioChoice
+    var preferredServerID: String? = nil
 }
 
 struct ReAnimePlayer: View {
@@ -250,7 +259,8 @@ struct ReAnimePlayer: View {
                 try Task.checkCancellation()
                 servers = result
                 if !result.contains(where: { $0.audio == audio }), let first = result.first { audio = first.audio }
-                selected = result.first { $0.audio == audio }
+                selected = result.first { $0.id == request.preferredServerID && $0.audio == audio }
+                    ?? result.first { $0.audio == audio }
                 if selected == nil { error = "ReAnime returned no playable server." }
             } catch is CancellationError { }
             catch { self.error = error.localizedDescription }

@@ -156,6 +156,7 @@ actor CatalogAPI {
     }
 
     func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
+        if anime.moduleID == ReAnimeAPI.moduleID { return try await ReAnimeAPI.shared.streams(anime, episode: episode, audio: audio) }
         if anime.moduleID != nil { return try await ModuleCatalog.shared.streams(anime, episode: episode, audio: audio) }
         return try await withThrowingTaskGroup(of: [StreamOption].self) { group in
             group.addTask { try await self.loadStreams(anime, episode: episode, audio: audio) }

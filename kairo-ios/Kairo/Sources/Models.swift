@@ -35,6 +35,7 @@ struct StreamOption: Identifiable {
     var label: String
     var preview: EpisodeImageResource? = nil
     var isHLS: Bool { url.pathExtension.lowercased() == "m3u8" }
+    var isEmbedded: Bool { url.host == "flixcloud.cc" && url.path.hasPrefix("/e/") }
 }
 
 struct WatchProgress: Codable, Identifiable {

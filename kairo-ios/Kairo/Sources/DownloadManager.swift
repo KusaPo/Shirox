@@ -153,6 +153,9 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
 
     @MainActor private func prepare(_ item: DownloadRecord) async {
         do {
+            if item.anime.moduleID == ReAnimeAPI.moduleID {
+                throw KairoError.message("ReAnime supplies embedded player links, not a verified offline video file. This episode cannot be added to Kairo downloads.")
+            }
             if let moduleID = item.anime.moduleID {
                 let module = try ModuleRegistry.shared.module(moduleID)
                 guard module.downloads else { throw KairoError.message("This module does not support downloads.") }
@@ -160,6 +163,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             guard item.anime.moduleID != nil || store.state.preferences.animexEnabled else { throw KairoError.message("Enable Animex in Sources before retrying this download.") }
             let options = try await CatalogAPI.shared.streams(item.anime, episode: item.episode, audio: item.audio)
             guard let stream = options.first(where: { item.provider == nil || $0.provider == item.provider }) else { throw KairoError.message("The selected provider is no longer available. Remove this queue item and select another provider.") }
+            guard !stream.isEmbedded else { throw KairoError.message("Embedded player links cannot be saved as offline videos.") }
             try Task.checkCancellation()
             guard store.state.downloads.contains(where: { $0.id == item.id }) else { return }
             let wifiOnly = store.state.preferences.wifiOnly
