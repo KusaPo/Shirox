@@ -239,9 +239,9 @@ struct AnimeDetailView: View {
                     if reanimeAudio[episode]?.contains(.dub) ?? true {
                         Button("Watch Dub") { openReAnime(episode, audio: .dub) }
                     }
-                    Button("ReAnime download options") {
+                    Button("Open ReAnime downloads in Safari") {
                         if let url = ReAnimeAPI.downloadPage(title, episode: episode) {
-                            reanimePage = ReAnimePage(url: url, title: "ReAnime downloads · Episode \(episode)")
+                            UIApplication.shared.open(url)
                         }
                     }
                 } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
