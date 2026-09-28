@@ -239,6 +239,7 @@ struct DiscoverView: View {
     @State private var note: String?
     @State private var generation = UUID()
     @State private var refresh = UUID()
+    @State private var reanimeBrowse: ReAnimePage?
     private let genres = ["All", "Action", "Adventure", "Comedy", "Drama", "Fantasy", "Mystery", "Romance", "Sci-Fi", "Slice of Life", "Sports"]
     private var source: DiscoverySource { DiscoverySource(rawValue: discoverySource) ?? .animex }
     private var moduleSelected: Bool { discoverySource.hasPrefix("module:") }
@@ -280,6 +281,18 @@ struct DiscoverView: View {
                     }
                     }
                     if let note, !searching { Text(note).font(.caption).foregroundStyle(.secondary) }
+                    if source == .reanime && !searching && !moduleSelected {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Search ReAnime titles above", systemImage: "magnifyingglass")
+                                .font(.headline)
+                            Text("Results and episodes come from ReAnime. Playback opens its website player with your Sub or Dub choice.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button("Browse ReAnime website") {
+                                reanimeBrowse = ReAnimePage(url: URL(string: "https://reanime.to/home")!, title: "ReAnime")
+                            }.buttonStyle(.borderedProminent)
+                        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16))
+                    }
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 20) {
                         ForEach(displayed) { anime in
                             NavigationLink { AnimeDetailView(anime: anime) } label: {
@@ -324,13 +337,14 @@ struct DiscoverView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if let error { ProblemView(message: error) { if items.isEmpty { refresh = UUID() } else { let current = generation; Task { await loadMore(current) } } } }
-                    if !busy && items.isEmpty && error == nil {
+                    if !busy && items.isEmpty && error == nil && (searching || source != .reanime) {
                         ContentUnavailableView(searching ? "No search results" : "No matching titles", systemImage: "magnifyingglass", description: Text("Try another genre or source."))
                     }
                 }.padding(16)
             }
         }
         .navigationTitle("Discover").searchable(text: $query, prompt: "Search \(sourceName)")
+        .fullScreenCover(item: $reanimeBrowse) { ReAnimeBrowser(page: $0) }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {

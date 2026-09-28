@@ -19,6 +19,8 @@ struct AnimeDetailView: View {
     @State private var reload = UUID()
     @State private var action: EpisodeAction?
     @State private var playback: PlaybackRequest?
+    @State private var reanimePage: ReAnimePage?
+    @State private var reanimeAudio: [Int: Set<AudioChoice>] = [:]
     @State private var pendingPlayback: PlaybackRequest?
     @State private var pendingQueued = false
     @State private var customEpisode = 1
@@ -31,6 +33,7 @@ struct AnimeDetailView: View {
     @State private var initialized = false
     @State private var synopsisExpanded = false
     private var title: Anime { resolved ?? anime }
+    private var isReAnime: Bool { anime.moduleID == ReAnimeAPI.moduleID }
     private var pageCount: Int { max(1, (min(title.episodeCount ?? 0, 5000) + 99) / 100) }
     private var visiblePage: Int { min(max(1, episodePage), pageCount) }
     private var metadataPage: Int {
@@ -87,6 +90,18 @@ struct AnimeDetailView: View {
         .task(id: "\(title.id)|\(title.malID ?? 0)|\(metadataPage)|\(metadataRetry)") {
             episodeDetails = [:]; metadataNotice = nil; metadataBusy = true
             do {
+                if isReAnime {
+                    let episodes = try await ReAnimeAPI.shared.episodes(title)
+                    try Task.checkCancellation()
+                    episodeDetails = Dictionary(uniqueKeysWithValues: episodes.map {
+                        ($0.number, EpisodeMetadata(number: $0.number, title: $0.title, thumbnail: $0.thumbnail))
+                    })
+                    reanimeAudio = Dictionary(uniqueKeysWithValues: episodes.map { episode in
+                        (episode.number, Set(([episode.subbed ? AudioChoice.sub : nil, episode.dubbed ? AudioChoice.dub : nil]).compactMap { $0 }))
+                    })
+                    metadataBusy = false
+                    return
+                }
                 if title.moduleID != nil {
                     let episodes = try await ModuleCatalog.shared.episodes(title)
                     try Task.checkCancellation()
@@ -135,6 +150,7 @@ struct AnimeDetailView: View {
             }
         }
         .fullScreenCover(item: $playback) { PlayerScreen(request: $0) }
+        .fullScreenCover(item: $reanimePage) { ReAnimeBrowser(page: $0) }
         .alert("Added to Downloads", isPresented: $queued) { Button("OK", role: .cancel) {} } message: { Text("The queue will check the selected provider and prepare your offline file. Existing items are not duplicated.") }
     }
     private var detailHeader: some View {
@@ -171,7 +187,9 @@ struct AnimeDetailView: View {
             }
             HStack(spacing: 12) {
                 Button {
-                    action = EpisodeAction(episode: title.moduleEpisodes?.first(where: { $0.number >= initialEpisode })?.number ?? initialEpisode, download: false)
+                    let episode = title.moduleEpisodes?.first(where: { $0.number >= initialEpisode })?.number ?? initialEpisode
+                    if isReAnime { openReAnime(episode) }
+                    else { action = EpisodeAction(episode: episode, download: false) }
                 } label: {
                     Label(store.progress(title, episode: initialEpisode) == nil ? "Watch episode \(initialEpisode)" : "Resume episode \(initialEpisode)", systemImage: "play.fill")
                         .frame(maxWidth: .infinity).frame(height: 36)
@@ -199,7 +217,38 @@ struct AnimeDetailView: View {
         let ready = matching.filter { $0.state == .ready && $0.localURL != nil }
         let saved = ready.first(where: { $0.audio == store.state.preferences.audio }) ?? ready.first
         let pending = matching.first(where: { $0.state != .ready })
-        return HStack {
+        return Group {
+        if isReAnime {
+            HStack(spacing: 12) {
+                Button { openReAnime(episode) } label: {
+                    HStack(spacing: 12) {
+                        EpisodeThumbnail(resource: episodeDetails[episode]?.imageResource,
+                                         anime: title, episode: episode, localURL: nil)
+                            .frame(width: 100, height: 100 * 9 / 16).clipShape(RoundedRectangle(cornerRadius: 9))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Episode \(episode)").font(.subheadline.weight(.semibold))
+                            if let name = episodeDetails[episode]?.title { Text(name).font(.caption).lineLimit(2) }
+                            Text("Watch on ReAnime").font(.caption).foregroundStyle(.secondary)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.buttonStyle(.plain)
+                Menu {
+                    if reanimeAudio[episode]?.contains(.sub) ?? true {
+                        Button("Watch Sub") { openReAnime(episode, audio: .sub) }
+                    }
+                    if reanimeAudio[episode]?.contains(.dub) ?? true {
+                        Button("Watch Dub") { openReAnime(episode, audio: .dub) }
+                    }
+                    Button("ReAnime download options") {
+                        if let url = ReAnimeAPI.downloadPage(title, episode: episode) {
+                            reanimePage = ReAnimePage(url: url, title: "ReAnime downloads · Episode \(episode)")
+                        }
+                    }
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Episode \(episode) audio and download options")
+            }
+        } else {
+        HStack {
             Button {
                 if let saved {
                     playback = PlaybackRequest(anime: title, episode: episode, localURL: saved.localURL, localAudio: saved.audio)
@@ -248,6 +297,15 @@ struct AnimeDetailView: View {
                 }.buttonStyle(.borderless).accessibilityLabel("Download episode \(episode)")
             }
         }
+        }
+        }
+    }
+    private func openReAnime(_ episode: Int, audio: AudioChoice? = nil) {
+        let available = reanimeAudio[episode] ?? [.sub, .dub]
+        let preferred = audio ?? store.state.preferences.audio
+        let choice = available.contains(preferred) ? preferred : (available.contains(.sub) ? .sub : .dub)
+        guard let url = ReAnimeAPI.watchURL(title, episode: episode, audio: choice) else { return }
+        reanimePage = ReAnimePage(url: url, title: "\(title.title) · Episode \(episode) · \(choice.shortLabel)")
     }
 }
 
@@ -283,6 +341,7 @@ struct EpisodeThumbnail: View {
                 } catch { if Task.isCancelled { return } }
             }
             // A broken metadata image must not block source previews or frames.
+            if anime.moduleID == ReAnimeAPI.moduleID { return }
             if let image = await EpisodePreviewService.shared.frame(anime: anime, episode: episode, localURL: localURL), !Task.isCancelled {
                 capturedFrame = image
             }

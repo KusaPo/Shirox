@@ -1,10 +1,14 @@
 import Foundation
 
 enum DiscoverySource: String, CaseIterable, Identifiable {
-    case animex, anilist
+    case animex, anilist, reanime
     var id: String { rawValue }
-    var name: String { self == .animex ? "Animex" : "AniList" }
-    var browseTitle: String { self == .animex ? "Explore Animex" : "Popular on AniList" }
+    var name: String {
+        switch self { case .animex: "Animex"; case .anilist: "AniList"; case .reanime: "ReAnime" }
+    }
+    var browseTitle: String {
+        switch self { case .animex: "Explore Animex"; case .anilist: "Popular on AniList"; case .reanime: "Explore ReAnime" }
+    }
 }
 
 enum DiscoverOrder: String, CaseIterable, Identifiable {
@@ -64,6 +68,8 @@ actor CatalogAPI {
 
     func discover(_ source: DiscoverySource, page: Int, order: DiscoverOrder, genre: String) async throws -> DiscoverPage {
         switch source {
+        case .reanime:
+            return DiscoverPage(anime: [], hasMore: false, note: "Search ReAnime by title to browse its own catalog. Its site has no verified paginated feed for Kairo yet.")
         case .animex:
             // Animex exposes search, but no verified page cursor or recommendation
             // feed. Vary search terms to browse samples and keep full-title search.
@@ -108,6 +114,7 @@ actor CatalogAPI {
     }
 
     func search(_ keyword: String, source: DiscoverySource) async throws -> [Anime] {
+        if source == .reanime { return try await ReAnimeAPI.shared.search(keyword) }
         if source == .animex { return try await search(keyword) }
         let query = """
         query Search($text:String) { Page(page:1,perPage:24) { media(type:ANIME,search:$text,isAdult:false) {
@@ -132,6 +139,7 @@ actor CatalogAPI {
     }
 
     func resolve(_ anime: Anime) async throws -> Anime {
+        if anime.moduleID == ReAnimeAPI.moduleID { return try await ReAnimeAPI.shared.resolve(anime) }
         if anime.moduleID != nil { return try await ModuleCatalog.shared.resolve(anime) }
         if let slug = anime.sourceID, !slug.isEmpty { return anime }
         let candidates = try await search(anime.title)
