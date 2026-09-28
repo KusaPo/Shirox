@@ -14,7 +14,9 @@ private final class ReAnimeContractProtocol: URLProtocol {
         case "/api/v1/anime/sample-season-abc123/episodes":
             body = #"{"data":[{"episode_number":1,"playable":true,"subbed":true,"dubbed":true,"title":"First Episode"},{"episode_number":13,"playable":true,"subbed":true,"dubbed":false,"title":""},{"episode_number":14,"playable":false,"subbed":false,"dubbed":false}],"totalPages":1}"#
         case "/api/v1/anime/sample-season-abc123":
-            body = #"{"anime_id":"sample-season-abc123","title":{"english":"Sample Season"},"description":"A sample story","episodes_total":14,"subbed":14,"dubbed":12}"#
+            body = #"{"anime_id":"sample-season-abc123","anilist_id":178789,"title":{"english":"Sample Season"},"description":"A sample story","episodes_total":14,"subbed":14,"dubbed":12}"#
+        case "/api/flix/178789/1":
+            body = #"{"success":true,"servers":[{"$id":"hd1-sub","serverName":"HD-1","dataLink":"https://flixcloud.cc/e/abc123?v=1","dataType":"sub"},{"$id":"hd2-dub","serverName":"HD-2","dataLink":"https://flixcloud.cc/e/abc123?v=2","dataType":"dub"},{"$id":"bad","dataLink":"https://other.example/e/x","dataType":"dub"}]}"#
         default:
             client?.urlProtocol(self, didFailWithError: URLError(.fileDoesNotExist)); return
         }
@@ -58,6 +60,12 @@ final class KairoTests: XCTestCase {
         XCTAssertEqual(resolved.moduleEpisodes?.first?.title, "First Episode")
         XCTAssertEqual(ReAnimeAPI.watchURL(anime, episode: 1, audio: .dub)?.absoluteString,
                        "https://reanime.to/watch/sample-season-abc123?ep=1&lang=dub")
+        let servers = try await source.servers(resolved, episode: 1)
+        XCTAssertEqual(servers.map(\.name), ["HD-1", "HD-2"])
+        XCTAssertEqual(servers.last?.audio, .dub)
+        let link = try XCTUnwrap(ReAnimeAPI.episodeLink(URL(string: "https://reanime.to/watch/sample-season-abc123?ep=1&lang=dub")!))
+        XCTAssertEqual(link.1, 1)
+        XCTAssertEqual(link.2, .dub)
         var invalid = anime
         invalid.sourceID = "../../private"
         XCTAssertNil(ReAnimeAPI.watchURL(invalid, episode: 1, audio: .sub))

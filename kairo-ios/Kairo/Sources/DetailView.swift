@@ -19,7 +19,7 @@ struct AnimeDetailView: View {
     @State private var reload = UUID()
     @State private var action: EpisodeAction?
     @State private var playback: PlaybackRequest?
-    @State private var reanimePage: ReAnimePage?
+    @State private var reanimePlayback: ReAnimePlayback?
     @State private var reanimeAudio: [Int: Set<AudioChoice>] = [:]
     @State private var pendingPlayback: PlaybackRequest?
     @State private var pendingQueued = false
@@ -150,7 +150,7 @@ struct AnimeDetailView: View {
             }
         }
         .fullScreenCover(item: $playback) { PlayerScreen(request: $0) }
-        .fullScreenCover(item: $reanimePage) { ReAnimeBrowser(page: $0) }
+        .fullScreenCover(item: $reanimePlayback) { ReAnimePlayer(request: $0) }
         .alert("Added to Downloads", isPresented: $queued) { Button("OK", role: .cancel) {} } message: { Text("The queue will check the selected provider and prepare your offline file. Existing items are not duplicated.") }
     }
     private var detailHeader: some View {
@@ -228,7 +228,7 @@ struct AnimeDetailView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Episode \(episode)").font(.subheadline.weight(.semibold))
                             if let name = episodeDetails[episode]?.title { Text(name).font(.caption).lineLimit(2) }
-                            Text("Watch on ReAnime").font(.caption).foregroundStyle(.secondary)
+                            Text("Watch in Kairo").font(.caption).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.buttonStyle(.plain)
@@ -304,8 +304,7 @@ struct AnimeDetailView: View {
         let available = reanimeAudio[episode] ?? [.sub, .dub]
         let preferred = audio ?? store.state.preferences.audio
         let choice = available.contains(preferred) ? preferred : (available.contains(.sub) ? .sub : .dub)
-        guard let url = ReAnimeAPI.watchURL(title, episode: episode, audio: choice) else { return }
-        reanimePage = ReAnimePage(url: url, title: "\(title.title) · Episode \(episode) · \(choice.shortLabel)")
+        reanimePlayback = ReAnimePlayback(anime: title, episode: episode, audio: choice)
     }
 }
 

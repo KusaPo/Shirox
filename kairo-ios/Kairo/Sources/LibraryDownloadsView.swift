@@ -93,7 +93,7 @@ struct SourcesView: View {
     @AppStorage("playerSeekLong") private var longSeek = 85
     @State private var sourceLink = ""
     @State private var reanimeLink = ""
-    @State private var reanimePage: ReAnimePage?
+    @State private var reanimePlayback: ReAnimePlayback?
     @State private var reanimeLinkError: String?
     @State private var manifestMessage: String?
     @State private var inspecting = false
@@ -119,7 +119,7 @@ struct SourcesView: View {
             Section {
                 Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
                 Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
-                Text("ReAnime is built in. Select it at the top of Discover to search its catalog and watch with its website player.")
+                Text("ReAnime is built in. Select it in Discover to search its catalog and play episodes using the site's servers inside Kairo.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Sources") }
             Section {
@@ -140,12 +140,16 @@ struct SourcesView: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 Button("Open episode") {
                     let value = reanimeLink.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard let url = URL(string: value), url.scheme == "https", url.host == "reanime.to",
-                          url.path.hasPrefix("/watch/") else {
+                    guard let url = URL(string: value), let (anime, episode, audio) = ReAnimeAPI.episodeLink(url) else {
                         reanimeLinkError = "Paste a ReAnime HTTPS watch link."; return
                     }
                     reanimeLinkError = nil
-                    reanimePage = ReAnimePage(url: url, title: "ReAnime episode")
+                    Task {
+                        do {
+                            let resolved = try await ReAnimeAPI.shared.resolve(anime)
+                            reanimePlayback = ReAnimePlayback(anime: resolved, episode: episode, audio: audio)
+                        } catch { reanimeLinkError = error.localizedDescription }
+                    }
                 }.disabled(reanimeLink.isEmpty)
                 if let reanimeLinkError { Text(reanimeLinkError).font(.caption).foregroundStyle(.red) }
             }
@@ -193,7 +197,7 @@ struct SourcesView: View {
             }
             Section("Your data") { Text("Your library, history and download records are saved on this device. Catalog searches contact AniList or the enabled source. Episode details also use MyAnimeList metadata through Jikan; media comes from the provider you select.").font(.caption) }
         }.navigationTitle("Sources & preferences")
-            .fullScreenCover(item: $reanimePage) { ReAnimeBrowser(page: $0) }
+            .fullScreenCover(item: $reanimePlayback) { ReAnimePlayer(request: $0) }
     }
     @MainActor private func inspect() async {
         guard let url = WebAddress.media(sourceLink.trimmingCharacters(in: .whitespacesAndNewlines)) else { manifestMessage = "Enter a public HTTPS manifest link."; return }

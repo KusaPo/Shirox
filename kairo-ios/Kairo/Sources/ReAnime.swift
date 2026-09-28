@@ -14,6 +14,13 @@ struct ReAnimeEpisode {
     }
 }
 
+struct ReAnimeServer: Identifiable {
+    let id: String
+    let name: String
+    let url: URL
+    let audio: AudioChoice
+}
+
 actor ReAnimeAPI {
     static let shared = ReAnimeAPI()
     static let moduleID = "builtin:reanime"
@@ -34,6 +41,18 @@ actor ReAnimeAPI {
         var parts = URLComponents(string: "https://reanime.to/watch/\(slug)")!
         parts.queryItems = [URLQueryItem(name: "ep", value: String(episode)), URLQueryItem(name: "lang", value: audio.rawValue)]
         return parts.url
+    }
+    static func episodeLink(_ url: URL) -> (Anime, Int, AudioChoice)? {
+        guard url.scheme == "https", url.host == "reanime.to",
+              url.pathComponents.count == 3, url.pathComponents[1] == "watch" else { return nil }
+        let slug = url.lastPathComponent
+        var anime = Anime(sourceID: slug, title: slug.replacingOccurrences(of: "-", with: " "))
+        anime.moduleID = moduleID
+        anime.moduleName = "ReAnime"
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let episode = Int(query.first { $0.name == "ep" }?.value ?? "1") ?? 1
+        guard episode > 0, episode <= 5000, Self.slug(anime) != nil else { return nil }
+        return (anime, episode, query.first { $0.name == "lang" }?.value == "dub" ? .dub : .sub)
     }
     static func downloadPage(_ anime: Anime, episode: Int) -> URL? {
         guard slug(anime) != nil, episode > 0 else { return nil }
@@ -118,6 +137,112 @@ actor ReAnimeAPI {
         result.episodeCount = list.last?.number
         return result
     }
+
+    func servers(_ anime: Anime, episode: Int) async throws -> [ReAnimeServer] {
+        guard Self.slug(anime) != nil, episode > 0 else { throw KairoError.message("Invalid ReAnime episode.") }
+        let id: Int
+        if let known = anime.anilistID, known > 0 { id = known }
+        else {
+            guard let slug = Self.slug(anime),
+                  let found = try await json("/api/v1/anime/\(slug)")["anilist_id"] as? Int,
+                  found > 0 else { throw KairoError.message("ReAnime did not provide a player identifier for this title.") }
+            id = found
+        }
+        let response = try await json("/api/flix/\(id)/\(episode)")
+        guard response["success"] as? Bool == true,
+              let rows = response["servers"] as? [[String: Any]] else {
+            throw KairoError.message("ReAnime returned no player servers for this episode.")
+        }
+        return rows.compactMap { row in
+            guard let raw = row["dataLink"] as? String,
+                  let url = URL(string: raw), url.scheme == "https", url.host == "flixcloud.cc",
+                  url.path.hasPrefix("/e/"),
+                  let type = row["dataType"] as? String,
+                  let audio = type.contains("dub") ? AudioChoice.dub : (type.contains("sub") ? .sub : nil) else { return nil }
+            let name = row["serverName"] as? String ?? "Player"
+            return ReAnimeServer(id: row["$id"] as? String ?? "\(audio.rawValue)-\(name)", name: name, url: url, audio: audio)
+        }
+    }
+}
+
+struct ReAnimePlayback: Identifiable {
+    let id = UUID()
+    let anime: Anime
+    let episode: Int
+    let audio: AudioChoice
+}
+
+struct ReAnimePlayer: View {
+    let request: ReAnimePlayback
+    @Environment(\.dismiss) private var dismiss
+    @State private var episode: Int
+    @State private var audio: AudioChoice
+    @State private var servers: [ReAnimeServer] = []
+    @State private var selected: ReAnimeServer?
+    @State private var error: String?
+    @State private var loading = true
+    @State private var playerLoading = true
+    @State private var playerError: String?
+    init(request: ReAnimePlayback) {
+        self.request = request
+        _episode = State(initialValue: request.episode)
+        _audio = State(initialValue: request.audio)
+    }
+    private var available: [ReAnimeServer] { servers.filter { $0.audio == audio } }
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                Text("\(request.anime.title) · Episode \(episode)").lineLimit(1).font(.subheadline.bold())
+                Spacer()
+            }.padding(.horizontal, 8)
+            ZStack {
+                Color.black
+                if let selected {
+                    ReAnimeWebView(url: selected.url, loading: $playerLoading, problem: $playerError,
+                                   referer: ReAnimeAPI.watchURL(request.anime, episode: episode, audio: audio))
+                        .id(selected.id).ignoresSafeArea(edges: .bottom)
+                    if playerLoading { ProgressView("Loading player…").tint(.white) }
+                } else if loading { ProgressView("Finding episode player…").tint(.white) }
+                else { ContentUnavailableView("No player", systemImage: "play.slash", description: Text(error ?? "No \(audio.shortLabel) server is available.")) }
+            }
+            if let playerError { Text(playerError).font(.caption).foregroundStyle(.orange).padding(8) }
+            HStack {
+                Picker("Language", selection: $audio) {
+                    ForEach(AudioChoice.allCases) { choice in
+                        if servers.contains(where: { $0.audio == choice }) { Text(choice.shortLabel).tag(choice) }
+                    }
+                }.pickerStyle(.segmented).frame(maxWidth: 160)
+                Picker("Server", selection: Binding(get: { selected?.id ?? "" }, set: { id in selected = available.first { $0.id == id } })) {
+                    ForEach(available) { server in Text(server.name).tag(server.id) }
+                }.frame(maxWidth: 130)
+                Spacer()
+                Button { episode -= 1 } label: { Image(systemName: "backward.end.fill") }
+                    .disabled(episode <= 1)
+                Button { episode += 1 } label: { Image(systemName: "forward.end.fill") }
+                    .disabled(episode >= (request.anime.episodeCount ?? episode))
+            }.padding(12)
+            if let url = ReAnimeAPI.watchURL(request.anime, episode: episode, audio: audio) {
+                Link("Open original player if this server fails", destination: url)
+                    .font(.caption).padding(.bottom, 12)
+            }
+        }
+        .foregroundStyle(.white).background(.black).tint(Theme.purple)
+        .task(id: episode) {
+            loading = true; selected = nil; error = nil; servers = []
+            do {
+                let result = try await ReAnimeAPI.shared.servers(request.anime, episode: episode)
+                try Task.checkCancellation()
+                servers = result
+                if !result.contains(where: { $0.audio == audio }), let first = result.first { audio = first.audio }
+                selected = result.first { $0.audio == audio }
+                if selected == nil { error = "ReAnime returned no playable server." }
+            } catch is CancellationError { }
+            catch { error = error.localizedDescription }
+            loading = false
+        }
+        .onChange(of: audio) { _, choice in selected = servers.first { $0.audio == choice }; playerError = nil; playerLoading = true }
+    }
 }
 
 struct ReAnimePage: Identifiable {
@@ -158,6 +283,7 @@ struct ReAnimeWebView: UIViewRepresentable {
     let url: URL
     @Binding var loading: Bool
     @Binding var problem: String?
+    var referer: URL? = nil
     final class Coordinator: NSObject, WKNavigationDelegate {
         var owner: ReAnimeWebView
         init(_ owner: ReAnimeWebView) { self.owner = owner }
@@ -177,7 +303,9 @@ struct ReAnimeWebView: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.scrollView.contentInsetAdjustmentBehavior = .automatic
-        view.load(URLRequest(url: url))
+        var request = URLRequest(url: url)
+        if let referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
+        view.load(request)
         return view
     }
     func updateUIView(_ uiView: WKWebView, context: Context) { context.coordinator.owner = self }
