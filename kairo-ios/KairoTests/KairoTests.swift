@@ -2,6 +2,30 @@ import XCTest
 import AVFoundation
 @testable import Kairo
 
+private final class ReAnimeContractProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "reanime.to" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let body: String
+        switch path {
+        case "/api/v1/search":
+            body = #"{"results":[{"anime_id":"sample-season-abc123","anilist_id":0,"title":{"english":"Sample Season","romaji":"Sample"},"cover_image":{"large":"https://images.example.com/cover.jpg"},"subbed":14,"dubbed":12}],"total":1}"#
+        case "/api/v1/anime/sample-season-abc123/episodes":
+            body = #"{"data":[{"episode_number":1,"playable":true,"subbed":true,"dubbed":true,"title":"First Episode"},{"episode_number":13,"playable":true,"subbed":true,"dubbed":false,"title":""},{"episode_number":14,"playable":false,"subbed":false,"dubbed":false}],"totalPages":1}"#
+        case "/api/v1/anime/sample-season-abc123":
+            body = #"{"anime_id":"sample-season-abc123","title":{"english":"Sample Season"},"description":"A sample story","episodes_total":14,"subbed":14,"dubbed":12}"#
+        default:
+            client?.urlProtocol(self, didFailWithError: URLError(.fileDoesNotExist)); return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
+}
+
 private final class EpisodeImageTestProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -18,6 +42,26 @@ private final class EpisodeImageTestProtocol: URLProtocol {
 }
 
 final class KairoTests: XCTestCase {
+    func testReAnimeCatalogAndAudioAvailability() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ReAnimeContractProtocol.self]
+        let source = ReAnimeAPI(configuration: config)
+        let found = try await source.search("Sample")
+        let anime = try XCTUnwrap(found.first)
+        XCTAssertEqual(anime.id, "builtin:reanime:sample-season-abc123")
+        let episodes = try await source.episodes(anime)
+        XCTAssertEqual(episodes.map(\.number), [1, 13])
+        XCTAssertTrue(episodes[0].dubbed)
+        XCTAssertFalse(episodes[1].dubbed)
+        let resolved = try await source.resolve(anime)
+        XCTAssertEqual(resolved.episodeCount, 13)
+        XCTAssertEqual(resolved.moduleEpisodes?.first?.title, "First Episode")
+        XCTAssertEqual(ReAnimeAPI.watchURL(anime, episode: 1, audio: .dub)?.absoluteString,
+                       "https://reanime.to/watch/sample-season-abc123?ep=1&lang=dub")
+        var invalid = anime
+        invalid.sourceID = "../../private"
+        XCTAssertNil(ReAnimeAPI.watchURL(invalid, episode: 1, audio: .sub))
+    }
     func testEpisodeImageObjectKeepsHeadersWithItsURL() throws {
         let row: [String: Any] = ["title": "Episode 3 - Arrival", "thumbnail": [
             "url": "https://images.example.com/3.png", "headers": ["Referer": "https://video.example.com/", "User-Agent": "KairoTest"]]]

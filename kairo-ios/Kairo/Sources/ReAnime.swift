@@ -18,8 +18,8 @@ actor ReAnimeAPI {
     static let shared = ReAnimeAPI()
     static let moduleID = "builtin:reanime"
     private let session: URLSession
-    init() {
-        let configuration = URLSessionConfiguration.ephemeral
+    init(configuration provided: URLSessionConfiguration? = nil) {
+        let configuration = provided ?? URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 35
         session = URLSession(configuration: configuration)
