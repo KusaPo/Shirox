@@ -175,6 +175,8 @@ struct ReAnimePlayback: Identifiable {
 struct ReAnimePlayer: View {
     let request: ReAnimePlayback
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: AppStore
+    @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
     @State private var episode: Int
     @State private var audio: AudioChoice
     @State private var servers: [ReAnimeServer] = []
@@ -183,6 +185,8 @@ struct ReAnimePlayer: View {
     @State private var loading = true
     @State private var playerLoading = true
     @State private var playerError: String?
+    @State private var watchedSeconds = 0.0
+    @State private var watchedDuration = 0.0
     init(request: ReAnimePlayback) {
         self.request = request
         _episode = State(initialValue: request.episode)
@@ -200,13 +204,23 @@ struct ReAnimePlayer: View {
                 Color.black
                 if let selected {
                     ReAnimeWebView(url: selected.url, loading: $playerLoading, problem: $playerError,
-                                   referer: ReAnimeAPI.watchURL(request.anime, episode: episode, audio: audio))
+                                   referer: ReAnimeAPI.watchURL(request.anime, episode: episode, audio: audio),
+                                   resumeAt: watchedSeconds > 5 ? watchedSeconds : (store.progress(request.anime, episode: episode).flatMap { $0.finished ? nil : $0.seconds } ?? 0),
+                                   onProgress: { seconds, duration, ended in
+                                       watchedSeconds = seconds; watchedDuration = duration
+                                       store.record(request.anime, episode: episode, seconds: seconds, duration: duration, finished: ended)
+                                       if ended && autoPlayNext && episode < (request.anime.episodeCount ?? episode) { episode += 1 }
+                                   })
                         .id(selected.id).ignoresSafeArea(edges: .bottom)
                     if playerLoading { ProgressView("Loading player…").tint(.white) }
                 } else if loading { ProgressView("Finding episode player…").tint(.white) }
                 else { ContentUnavailableView("No player", systemImage: "play.slash", description: Text(error ?? "No \(audio.shortLabel) server is available.")) }
             }
             if let playerError { Text(playerError).font(.caption).foregroundStyle(.orange).padding(8) }
+            if watchedDuration > 0 {
+                ProgressView(value: min(watchedSeconds, watchedDuration), total: watchedDuration)
+                    .tint(Theme.purple).padding(.horizontal, 12)
+            }
             HStack {
                 Picker("Language", selection: $audio) {
                     ForEach(AudioChoice.allCases) { choice in
@@ -230,6 +244,7 @@ struct ReAnimePlayer: View {
         .foregroundStyle(.white).background(.black).tint(Theme.purple)
         .task(id: episode) {
             loading = true; selected = nil; error = nil; servers = []
+            watchedSeconds = 0; watchedDuration = 0
             do {
                 let result = try await ReAnimeAPI.shared.servers(request.anime, episode: episode)
                 try Task.checkCancellation()
@@ -284,9 +299,19 @@ struct ReAnimeWebView: UIViewRepresentable {
     @Binding var loading: Bool
     @Binding var problem: String?
     var referer: URL? = nil
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    var resumeAt: Double = 0
+    var onProgress: ((Double, Double, Bool) -> Void)? = nil
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var owner: ReAnimeWebView
         init(_ owner: ReAnimeWebView) { self.owner = owner }
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "kairoPlayback", let value = message.body as? [String: Any],
+                  let seconds = (value["seconds"] as? NSNumber)?.doubleValue,
+                  let duration = (value["duration"] as? NSNumber)?.doubleValue,
+                  seconds.isFinite, duration.isFinite, duration > 0 else { return }
+            let ended = value["ended"] as? Bool ?? false
+            DispatchQueue.main.async { self.owner.onProgress?(seconds, duration, ended) }
+        }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { owner.loading = false }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             owner.loading = false; owner.problem = error.localizedDescription
@@ -300,6 +325,30 @@ struct ReAnimeWebView: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
+        if onProgress != nil {
+            configuration.userContentController.add(context.coordinator, name: "kairoPlayback")
+            let start = resumeAt.isFinite && resumeAt > 5 && resumeAt < 360_000 ? resumeAt : 0
+            let script = """
+            (() => {
+              let last = -1;
+              let resumed = false;
+              const resumeAt = \(start);
+              setInterval(() => {
+                const video = document.querySelector('video');
+                if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+                if (!resumed) {
+                  resumed = true;
+                  if (resumeAt > 5 && resumeAt < video.duration - 10) video.currentTime = resumeAt;
+                }
+                const seconds = video.currentTime;
+                if (!Number.isFinite(seconds) || (Math.abs(seconds - last) < 2 && !video.ended)) return;
+                last = seconds;
+                window.webkit.messageHandlers.kairoPlayback.postMessage({seconds, duration: video.duration, ended: video.ended});
+              }, 3000);
+            })();
+            """
+            configuration.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        }
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.scrollView.contentInsetAdjustmentBehavior = .automatic
@@ -309,4 +358,8 @@ struct ReAnimeWebView: UIViewRepresentable {
         return view
     }
     func updateUIView(_ uiView: WKWebView, context: Context) { context.coordinator.owner = self }
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "kairoPlayback")
+        uiView.stopLoading()
+    }
 }
