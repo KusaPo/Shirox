@@ -15,6 +15,8 @@ private final class ReAnimeContractProtocol: URLProtocol {
             body = #"{"data":[{"episode_number":1,"playable":true,"subbed":true,"dubbed":true,"title":"First Episode"},{"episode_number":13,"playable":true,"subbed":true,"dubbed":false,"title":""},{"episode_number":14,"playable":false,"subbed":false,"dubbed":false}],"totalPages":1}"#
         case "/api/v1/anime/sample-season-abc123":
             body = #"{"anime_id":"sample-season-abc123","anilist_id":178789,"title":{"english":"Sample Season"},"description":"A sample story","episodes_total":14,"subbed":14,"dubbed":12}"#
+        case "/api/v1/home":
+            body = #"{"trending":[{"anime_id":"sample-season-abc123","title":{"english":"Sample Season"},"genres":["Fantasy"]}],"latest_aired":[{"anime_id":"recent-abc123","title":{"english":"Recent"},"genres":["Action"]}],"new_on_site":[]}"#
         case "/api/flix/178789/1":
             body = #"{"success":true,"servers":[{"$id":"hd1-sub","serverName":"HD-1","dataLink":"https://flixcloud.cc/e/abc123?v=1","dataType":"sub"},{"$id":"hd2-dub","serverName":"HD-2","dataLink":"https://flixcloud.cc/e/abc123?v=2","dataType":"dub"},{"$id":"bad","dataLink":"https://other.example/e/x","dataType":"dub"}]}"#
         default:
@@ -51,6 +53,12 @@ final class KairoTests: XCTestCase {
         let found = try await source.search("Sample")
         let anime = try XCTUnwrap(found.first)
         XCTAssertEqual(anime.id, "builtin:reanime:sample-season-abc123")
+        let trending = try await source.home(.popular, genre: "Fantasy")
+        let filtered = try await source.home(.popular, genre: "Action")
+        let latest = try await source.home(.trending, genre: "All")
+        XCTAssertEqual(trending.map(\.id), [anime.id])
+        XCTAssertTrue(filtered.isEmpty)
+        XCTAssertEqual(latest.first?.title, "Recent")
         let episodes = try await source.episodes(anime)
         XCTAssertEqual(episodes.map(\.number), [1, 13])
         XCTAssertTrue(episodes[0].dubbed)

@@ -268,7 +268,11 @@ struct DiscoverView: View {
                         HStack {
                             Menu {
                                 Picker("Sort", selection: $order) {
-                                    ForEach(DiscoverOrder.allCases) { option in Text(option.name).tag(option) }
+                                    ForEach(DiscoverOrder.allCases) { option in
+                                        Text(source == .reanime && !moduleSelected ?
+                                             (option == .popular ? "Top trending" : option == .trending ? "Latest aired" : "New on site") : option.name)
+                                            .tag(option)
+                                    }
                                 }
                             } label: { Label(order.name, systemImage: "arrow.up.arrow.down") }
                             Menu {
@@ -280,15 +284,6 @@ struct DiscoverView: View {
                     }
                     }
                     if let note, !searching { Text(note).font(.caption).foregroundStyle(.secondary) }
-                    if source == .reanime && !searching && !moduleSelected {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Label("Search ReAnime titles above", systemImage: "magnifyingglass")
-                                .font(.headline)
-                            Text("Results and episodes come from ReAnime. Kairo fetches the episode servers and opens the selected player here.")
-                                .font(.subheadline).foregroundStyle(.secondary)
-                        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16))
-                    }
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 20) {
                         ForEach(displayed) { anime in
                             NavigationLink { AnimeDetailView(anime: anime) } label: {

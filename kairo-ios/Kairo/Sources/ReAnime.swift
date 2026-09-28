@@ -108,6 +108,19 @@ actor ReAnimeAPI {
         guard let rows = result["results"] as? [[String: Any]] else { throw KairoError.message("ReAnime search format changed.") }
         return rows.compactMap(Self.anime)
     }
+    func home(_ order: DiscoverOrder, genre: String) async throws -> [Anime] {
+        let result = try await json("/api/v1/home")
+        let section: String
+        switch order {
+        case .popular: section = "trending"
+        case .trending: section = "latest_aired"
+        case .rated: section = "new_on_site"
+        }
+        guard let rows = result[section] as? [[String: Any]] else {
+            throw KairoError.message("ReAnime's home feed changed. Search for a title instead.")
+        }
+        return rows.compactMap(Self.anime).filter { genre == "All" || $0.genres.contains(genre) }
+    }
     func episodes(_ anime: Anime) async throws -> [ReAnimeEpisode] {
         guard let slug = Self.slug(anime) else { throw KairoError.message("Invalid ReAnime title identifier.") }
         let result = try await json("/api/v1/anime/\(slug)/episodes", query: [.init(name: "limit", value: "2000")])

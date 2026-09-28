@@ -69,7 +69,9 @@ actor CatalogAPI {
     func discover(_ source: DiscoverySource, page: Int, order: DiscoverOrder, genre: String) async throws -> DiscoverPage {
         switch source {
         case .reanime:
-            return DiscoverPage(anime: [], hasMore: false, note: "Search ReAnime by title to browse its own catalog. Its site has no verified paginated feed for Kairo yet.")
+            guard page == 1 else { return DiscoverPage(anime: [], hasMore: false) }
+            return DiscoverPage(anime: try await ReAnimeAPI.shared.home(order, genre: genre), hasMore: false,
+                                note: "Titles from ReAnime's home feed. Search to explore the rest of its catalog.")
         case .animex:
             // Animex exposes search, but no verified page cursor or recommendation
             // feed. Vary search terms to browse samples and keep full-title search.
