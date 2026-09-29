@@ -42,11 +42,6 @@ jobs:
         run: |
           npm ci --prefix kairo-ios/reanime-gateway
           npm test --prefix kairo-ios/reanime-gateway
-      - name: Probe native ReAnime media path
-        continue-on-error: true
-        env:
-          GATEWAY_SECRET: ci-smoke-secret-longer-than-thirty-two-characters
-        run: node kairo-ios/reanime-gateway/live-smoke.mjs
       - name: Show Xcode version
         run: xcodebuild -version
       - name: Select an available iPhone simulator

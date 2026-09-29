@@ -122,5 +122,5 @@ export function createGateway(resolve = resolveEmbed) {
   });
 }
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  createGateway().listen(port, '0.0.0.0', () => console.log(`Kairo media gateway on ${port}`));
+  createGateway().listen(port, process.env.HOST || '0.0.0.0', () => console.log(`Kairo media gateway on ${port}`));
 }
