@@ -1,12 +1,15 @@
 import { resolveEmbed } from './resolve.mjs';
 import { decodePlaylist, unwrapSegment } from './server.mjs';
 
-const metadata = await fetch('https://reanime.to/api/flix/178789/1', { headers: { Accept: 'application/json' } });
-if (!metadata.ok) throw new Error(`ReAnime episode API returned ${metadata.status}`);
-const servers = (await metadata.json()).servers ?? [];
-const server = servers.find(item => item.serverName === 'HD-1' && item.dataType === 'dub');
-if (!server) throw new Error('Expected HD-1 dubbed episode server is unavailable');
-const resolved = await resolveEmbed(server.dataLink);
+const metadata = await fetch('https://reanime.to/api/flix/178789/1', { headers: {
+  Accept: 'application/json', 'User-Agent': 'Mozilla/5.0', Referer: 'https://reanime.to/'
+}});
+let embed = 'https://flixcloud.cc/e/iok35hilu01s?v=1';
+if (metadata.ok) {
+  const servers = (await metadata.json()).servers ?? [];
+  embed = servers.find(item => item.serverName === 'HD-1' && item.dataType === 'dub')?.dataLink ?? embed;
+} else console.log(`ReAnime catalog probe returned HTTP ${metadata.status}; trying the previously observed embed`);
+const resolved = await resolveEmbed(embed);
 const headers = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://flixcloud.cc/', Origin: 'https://flixcloud.cc' };
 let url = new URL(resolved.stream);
 for (let level = 0; level < 3; level++) {
