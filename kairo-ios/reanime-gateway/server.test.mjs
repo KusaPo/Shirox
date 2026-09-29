@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pageData, playlistKey } from './resolve.mjs';
 process.env.GATEWAY_SECRET = 'the-unit-test-secret-is-long-enough-to-use';
-const { ticket, unticket, decodePlaylist, unwrapSegment } = await import('./server.mjs');
+const { ticket, unticket, decodePlaylist, unwrapSegment, createGateway } = await import('./server.mjs');
 
 test('SSR data parser handles quoted braces without executing code', () => {
   const data = pageData('<script>{type:"data",data:{obfuscation_seed:"ab12", title:"A {day}", nested:{number:2}, empty:undefined, enabled:!0}}</script>');
@@ -37,4 +37,33 @@ test('tickets reject host substitution and expiry', () => {
   assert.throws(() => unticket(good.slice(0, -2) + 'xx'));
   assert.throws(() => unticket(ticket({ url: 'https://example.com/episode.ts', expires: Date.now() + 10_000 })));
   assert.throws(() => unticket(ticket({ url: 'https://fetch1.flixcloud.cc/episode.ts', expires: Date.now() - 1 })));
+});
+test('gateway serves signed HLS playlists and segment bytes', async () => {
+  const originalFetch = global.fetch;
+  process.env.PUBLIC_ORIGIN = 'https://media.example.com';
+  process.env.GATEWAY_ACCESS_KEY = 'another-test-key-long-enough';
+  global.fetch = async url => new Response(
+    String(url).endsWith('.m3u8') ? '#EXTM3U\n#EXTINF:4,\npart.ts\n' : Buffer.from([0x47, 0x40, 0, 0x10]),
+    { status: 200 }
+  );
+  const gateway = createGateway(async () => ({ stream: 'https://fetch1.flixcloud.cc/video/master.m3u8', playlistKey: null }));
+  await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve));
+  const local = `http://127.0.0.1:${gateway.address().port}`;
+  try {
+    const resolve = await originalFetch(`${local}/resolve?embed=test`, { headers: { 'X-Kairo-Access': process.env.GATEWAY_ACCESS_KEY } });
+    assert.equal(resolve.status, 200);
+    const master = new URL((await resolve.json()).url);
+    assert.equal(master.hostname, 'media.example.com');
+    const playlist = await originalFetch(`${local}${master.pathname}${master.search}`);
+    assert.equal(playlist.status, 200);
+    const segment = new URL((await playlist.text()).split('\n').find(line => line.startsWith('https:')));
+    const video = await originalFetch(`${local}${segment.pathname}${segment.search}`);
+    assert.equal(video.headers.get('content-type'), 'video/mp2t');
+    assert.equal(Buffer.from(await video.arrayBuffer())[0], 0x47);
+  } finally {
+    await new Promise(resolve => gateway.close(resolve));
+    global.fetch = originalFetch;
+    delete process.env.PUBLIC_ORIGIN;
+    delete process.env.GATEWAY_ACCESS_KEY;
+  }
 });
