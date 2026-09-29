@@ -21,9 +21,81 @@ export function pageData(html) {
     }
     if (c === '"' || c === "'") { quote = c; continue; }
     if (c === '{') depth++;
-    if (c === '}' && --depth === 0) return JSON5.parse(html.slice(start, i + 1));
+    if (c === '}' && --depth === 0) return JSON5.parse(normalizeValues(html.slice(start, i + 1)));
   }
   throw new Error('Incomplete FlixCloud episode data');
+}
+
+function normalizeValues(source) {
+  // Svelte's object literal occasionally uses JS-only values. Replace them
+  // outside strings, leaving quoted episode metadata untouched.
+  let result = '', quote = '', escaping = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (quote) {
+      result += c;
+      if (escaping) escaping = false;
+      else if (c === '\\') escaping = true;
+      else if (c === quote) quote = '';
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; result += c; continue; }
+    const previous = source[i - 1] ?? '';
+    const next = source[i + 9] ?? '';
+    if (source.startsWith('undefined', i) && next !== ':' && !/[\w$]/.test(previous) && !/[\w$]/.test(next)) {
+      result += 'null'; i += 8; continue;
+    }
+    if (c === '!' && (source[i + 1] === '0' || source[i + 1] === '1')) {
+      result += source[i + 1] === '0' ? 'true' : 'false'; i++; continue;
+    }
+    result += c;
+  }
+  return result;
+}
+
+// The playlist XOR key is stored as two halves of a WASM data segment.
+// Read the data section without running untrusted code to recover that key.
+export function playlistKey(wasmBase64) {
+  const wasm = binary(wasmBase64);
+  if (wasm.subarray(0, 4).toString('hex') !== '0061736d') return null;
+  const leb = (index) => {
+    let result = 0, shift = 0, current;
+    do {
+      if (index >= wasm.length || shift > 28) throw new Error('Malformed WASM section');
+      current = wasm[index++]; result |= (current & 127) << shift; shift += 7;
+    } while (current & 128);
+    return [result, index];
+  };
+  let position = 8;
+  while (position < wasm.length) {
+    const section = wasm[position++];
+    const [size, next] = leb(position);
+    position = next;
+    const end = position + size;
+    if (end > wasm.length) throw new Error('Malformed WASM section length');
+    if (section === 11) {
+      let index = position;
+      const [count, afterCount] = leb(index); index = afterCount;
+      for (let n = 0; n < count && index < end; n++) {
+        const [flags, afterFlags] = leb(index); index = afterFlags;
+        if (flags === 2) { [, index] = leb(index); }
+        if (flags === 0 || flags === 2) {
+          if (wasm[index++] !== 0x41) throw new Error('Unknown WASM offset expression');
+          [, index] = leb(index);
+          if (wasm[index++] !== 0x0b) throw new Error('Unknown WASM offset terminator');
+        }
+        const [length, afterLength] = leb(index); index = afterLength;
+        const chunk = wasm.subarray(index, index + length); index += length;
+        if (chunk.length >= 64) {
+          const key = Buffer.alloc(32);
+          for (let j = 0; j < 32; j++) key[j] = chunk[j] ^ chunk[j + 32];
+          return key.toString('base64');
+        }
+      }
+    }
+    position = end;
+  }
+  return null;
 }
 
 function names(seed) {
@@ -80,5 +152,5 @@ export async function resolveEmbed(embed, get = fetch) {
   const stream = Buffer.concat([decrypt.update(encrypted), decrypt.final()]).toString('utf8').trim();
   const streamURL = new URL(stream);
   if (streamURL.protocol !== 'https:' || !streamURL.hostname.endsWith('.flixcloud.cc')) throw new Error('Untrusted FlixCloud media host');
-  return { stream, playlistKey: data.playlist_key ?? payload.playlist_key ?? data.key ?? payload.key ?? null };
+  return { stream, playlistKey: playlistKey(data.w_payload) };
 }

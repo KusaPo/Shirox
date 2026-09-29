@@ -1,13 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pageData } from './resolve.mjs';
+import { pageData, playlistKey } from './resolve.mjs';
 process.env.GATEWAY_SECRET = 'the-unit-test-secret-is-long-enough-to-use';
 const { ticket, unticket, decodePlaylist, unwrapSegment } = await import('./server.mjs');
 
 test('SSR data parser handles quoted braces without executing code', () => {
-  const data = pageData('<script>{type:"data",data:{obfuscation_seed:"ab12", title:"A {day}", nested:{number:2}}}</script>');
+  const data = pageData('<script>{type:"data",data:{obfuscation_seed:"ab12", title:"A {day}", nested:{number:2}, empty:undefined, enabled:!0}}</script>');
   assert.equal(data.title, 'A {day}');
   assert.equal(data.nested.number, 2);
+  assert.equal(data.empty, null);
+  assert.equal(data.enabled, true);
+});
+test('playlist key comes from paired bytes in WASM data', () => {
+  const left = Buffer.alloc(32, 17), right = Buffer.alloc(32, 42);
+  const segment = Buffer.concat([left, right]);
+  const wasm = Buffer.concat([Buffer.from([0,97,115,109,1,0,0,0, 11,70, 1,0,65,0,11,64]), segment]);
+  assert.deepEqual(Buffer.from(playlistKey(wasm.toString('base64')), 'base64'), Buffer.alloc(32, 17 ^ 42));
 });
 test('plain and encoded playlists produce HLS', () => {
   const playlist = '#EXTM3U\n#EXT-X-VERSION:3\n';
