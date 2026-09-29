@@ -153,10 +153,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
 
     @MainActor private func prepare(_ item: DownloadRecord) async {
         do {
-            if item.anime.moduleID == ReAnimeAPI.moduleID {
-                throw KairoError.message("ReAnime supplies embedded player links, not a verified offline video file. This episode cannot be added to Kairo downloads.")
-            }
-            if let moduleID = item.anime.moduleID {
+            if let moduleID = item.anime.moduleID, moduleID != ReAnimeAPI.moduleID {
                 let module = try ModuleRegistry.shared.module(moduleID)
                 guard module.downloads else { throw KairoError.message("This module does not support downloads.") }
             }

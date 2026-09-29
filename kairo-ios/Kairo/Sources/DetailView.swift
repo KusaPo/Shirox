@@ -19,10 +19,7 @@ struct AnimeDetailView: View {
     @State private var reload = UUID()
     @State private var action: EpisodeAction?
     @State private var playback: PlaybackRequest?
-    @State private var reanimePlayback: ReAnimePlayback?
-    @State private var reanimeAudio: [Int: Set<AudioChoice>] = [:]
     @State private var pendingPlayback: PlaybackRequest?
-    @State private var pendingReAnimePlayback: ReAnimePlayback?
     @State private var pendingQueued = false
     @State private var customEpisode = 1
     @State private var queued = false
@@ -97,9 +94,6 @@ struct AnimeDetailView: View {
                     episodeDetails = Dictionary(uniqueKeysWithValues: episodes.map {
                         ($0.number, EpisodeMetadata(number: $0.number, title: $0.title, thumbnail: $0.thumbnail))
                     })
-                    reanimeAudio = Dictionary(uniqueKeysWithValues: episodes.map { episode in
-                        (episode.number, Set(([episode.subbed ? AudioChoice.sub : nil, episode.dubbed ? AudioChoice.dub : nil]).compactMap { $0 }))
-                    })
                     metadataBusy = false
                     return
                 }
@@ -134,8 +128,6 @@ struct AnimeDetailView: View {
         .sheet(item: $action, onDismiss: {
             playback = pendingPlayback
             pendingPlayback = nil
-            reanimePlayback = pendingReAnimePlayback
-            pendingReAnimePlayback = nil
             queued = pendingQueued
             pendingQueued = false
         }) { selection in
@@ -147,18 +139,12 @@ struct AnimeDetailView: View {
                     }
                     pendingQueued = true
                 } else {
-                    if stream.isEmbedded {
-                        pendingReAnimePlayback = ReAnimePlayback(anime: title, episode: selection.episode,
-                                                                 audio: stream.audio, preferredServerID: stream.id)
-                    } else {
-                        pendingPlayback = PlaybackRequest(anime: title, episode: selection.episode, stream: stream)
-                    }
+                    pendingPlayback = PlaybackRequest(anime: title, episode: selection.episode, stream: stream)
                 }
                 action = nil
             }
         }
         .fullScreenCover(item: $playback) { PlayerScreen(request: $0) }
-        .fullScreenCover(item: $reanimePlayback) { ReAnimePlayer(request: $0) }
         .alert("Added to Downloads", isPresented: $queued) { Button("OK", role: .cancel) {} } message: { Text("The queue will check the selected provider and prepare your offline file. Existing items are not duplicated.") }
     }
     private var detailHeader: some View {
@@ -196,8 +182,7 @@ struct AnimeDetailView: View {
             HStack(spacing: 12) {
                 Button {
                     let episode = title.moduleEpisodes?.first(where: { $0.number >= initialEpisode })?.number ?? initialEpisode
-                    if isReAnime { openReAnime(episode) }
-                    else { action = EpisodeAction(episode: episode, download: false) }
+                    action = EpisodeAction(episode: episode, download: false)
                 } label: {
                     Label(store.progress(title, episode: initialEpisode) == nil ? "Watch episode \(initialEpisode)" : "Resume episode \(initialEpisode)", systemImage: "play.fill")
                         .frame(maxWidth: .infinity).frame(height: 36)
@@ -226,36 +211,6 @@ struct AnimeDetailView: View {
         let saved = ready.first(where: { $0.audio == store.state.preferences.audio }) ?? ready.first
         let pending = matching.first(where: { $0.state != .ready })
         return Group {
-        if isReAnime {
-            HStack(spacing: 12) {
-                Button { openReAnime(episode) } label: {
-                    HStack(spacing: 12) {
-                        EpisodeThumbnail(resource: episodeDetails[episode]?.imageResource,
-                                         anime: title, episode: episode, localURL: nil)
-                            .frame(width: 100, height: 100 * 9 / 16).clipShape(RoundedRectangle(cornerRadius: 9))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Episode \(episode)").font(.subheadline.weight(.semibold))
-                            if let name = episodeDetails[episode]?.title { Text(name).font(.caption).lineLimit(2) }
-                            Text("Choose playback source").font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }.buttonStyle(.plain)
-                Menu {
-                    if reanimeAudio[episode]?.contains(.sub) ?? true {
-                        Button("Watch Sub") { openReAnime(episode, audio: .sub) }
-                    }
-                    if reanimeAudio[episode]?.contains(.dub) ?? true {
-                        Button("Watch Dub") { openReAnime(episode, audio: .dub) }
-                    }
-                    Button("Open ReAnime downloads in Safari") {
-                        if let url = ReAnimeAPI.downloadPage(title, episode: episode) {
-                            UIApplication.shared.open(url)
-                        }
-                    }
-                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Episode \(episode) audio and download options")
-            }
-        } else {
         HStack {
             Button {
                 if let saved {
@@ -306,15 +261,6 @@ struct AnimeDetailView: View {
             }
         }
         }
-        }
-    }
-    private func openReAnime(_ episode: Int, audio: AudioChoice? = nil) {
-        let available = reanimeAudio[episode] ?? [.sub, .dub]
-        let preferred = audio ?? store.state.preferences.audio
-        let choice = available.contains(preferred) ? preferred : (available.contains(.sub) ? .sub : .dub)
-        store.state.preferences.audio = choice
-        store.save()
-        action = EpisodeAction(episode: episode, download: false)
     }
 }
 

@@ -38,6 +38,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Test ReAnime media gateway
+        run: |
+          npm ci --prefix kairo-ios/reanime-gateway
+          npm test --prefix kairo-ios/reanime-gateway
       - name: Show Xcode version
         run: xcodebuild -version
       - name: Select an available iPhone simulator

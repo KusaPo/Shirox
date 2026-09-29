@@ -3,7 +3,9 @@ import AVFoundation
 @testable import Kairo
 
 private final class ReAnimeContractProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "reanime.to" }
+    override class func canInit(with request: URLRequest) -> Bool {
+        ["reanime.to", "gateway.example"].contains(request.url?.host ?? "")
+    }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let path = request.url?.path ?? ""
@@ -19,10 +21,14 @@ private final class ReAnimeContractProtocol: URLProtocol {
             body = #"{"trending":[{"anime_id":"sample-season-abc123","title":{"english":"Sample Season"},"genres":["Fantasy"]}],"latest_aired":[{"anime_id":"recent-abc123","title":{"english":"Recent"},"genres":["Action"]}],"new_on_site":[]}"#
         case "/api/flix/178789/1":
             body = #"{"success":true,"servers":[{"$id":"hd1-sub","serverName":"HD-1","dataLink":"https://flixcloud.cc/e/abc123?v=1","dataType":"sub"},{"$id":"hd2-dub","serverName":"HD-2","dataLink":"https://flixcloud.cc/e/abc123?v=2","dataType":"dub"},{"$id":"bad","dataLink":"https://other.example/e/x","dataType":"dub"}]}"#
+        case "/resolve":
+            body = #"{"url":"https://gateway.example/hls/master.m3u8?session=test"}"#
+        case "/hls/master.m3u8":
+            body = "#EXTM3U\n#EXT-X-VERSION:3\n"
         default:
             client?.urlProtocol(self, didFailWithError: URLError(.fileDoesNotExist)); return
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":path.hasSuffix(".m3u8") ? "application/vnd.apple.mpegurl" : "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -47,6 +53,8 @@ private final class EpisodeImageTestProtocol: URLProtocol {
 
 final class KairoTests: XCTestCase {
     func testReAnimeCatalogAndAudioAvailability() async throws {
+        UserDefaults.standard.set("https://gateway.example", forKey: "reanimeGatewayURL")
+        defer { UserDefaults.standard.removeObject(forKey: "reanimeGatewayURL") }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [ReAnimeContractProtocol.self]
         let source = ReAnimeAPI(configuration: config)
@@ -73,7 +81,8 @@ final class KairoTests: XCTestCase {
         XCTAssertEqual(servers.last?.audio, .dub)
         let dubOptions = try await source.streams(resolved, episode: 1, audio: .dub)
         XCTAssertEqual(dubOptions.map(\.provider), ["hd2-dub"])
-        XCTAssertTrue(try XCTUnwrap(dubOptions.first).isEmbedded)
+        XCTAssertTrue(try XCTUnwrap(dubOptions.first).isHLS)
+        XCTAssertFalse(try XCTUnwrap(dubOptions.first).isEmbedded)
         let link = try XCTUnwrap(ReAnimeAPI.episodeLink(URL(string: "https://reanime.to/watch/sample-season-abc123?ep=1&lang=dub")!))
         XCTAssertEqual(link.1, 1)
         XCTAssertEqual(link.2, .dub)

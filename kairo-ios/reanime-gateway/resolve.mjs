@@ -1,0 +1,84 @@
+import crypto from 'node:crypto';
+import JSON5 from 'json5';
+
+const hash = input => crypto.createHash('sha256').update(input).digest('hex');
+const binary = input => Buffer.from(input, 'base64');
+
+// SvelteKit serializes this data as a JavaScript object literal rather than JSON.
+// Scan braces while respecting quoted strings; JSON5 parses data, never executes it.
+export function pageData(html) {
+  const marker = /\{type:"data",data:\s*\{/g.exec(html);
+  if (!marker) throw new Error('FlixCloud did not expose episode data');
+  const start = marker.index + marker[0].lastIndexOf('{');
+  let depth = 0, quote = '', escape = false;
+  for (let i = start; i < html.length; i++) {
+    const c = html[i];
+    if (quote) {
+      if (escape) escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === quote) quote = '';
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '{') depth++;
+    if (c === '}' && --depth === 0) return JSON5.parse(html.slice(start, i + 1));
+  }
+  throw new Error('Incomplete FlixCloud episode data');
+}
+
+function names(seed) {
+  let first = seed;
+  for (let i = 0; i < 3; i++) first = hash(first + i);
+  let second = first;
+  for (let i = 0; i < 3; i++) second = hash(second + i);
+  return {
+    container: 'cd_' + first.slice(24, 32), array: 'ad_' + first.slice(32, 40),
+    object: 'od_' + first.slice(40, 48), fragment: 'kf_' + first.slice(8, 16),
+    iv: 'ivf_' + first.slice(16, 24),
+    token: first.slice(48, 64) + '_' + first.slice(56, 64),
+    otherFragment: second.slice(0, 16) + '_' + second.slice(16, 24)
+  };
+}
+
+async function transform(wasm, first, second, third, seed) {
+  const { instance } = await WebAssembly.instantiate(binary(wasm));
+  const { memory, _s, _r } = instance.exports;
+  if (!memory || !_s || !_r || first.length !== second.length || first.length !== third.length || first.length > 256)
+    throw new Error('FlixCloud changed its key transform');
+  const bytes = new Uint8Array(memory.buffer);
+  const length = first.length;
+  bytes.set(first, 1024); bytes.set(second, 1024 + length); bytes.set(third, 1024 + length * 2);
+  _s(Number.parseInt(seed.slice(0, 8), 16));
+  _r(1024, 1024 + length, 1024 + length * 2, 1024 + length * 3, length);
+  return Buffer.from(bytes.slice(1024 + length * 3, 1024 + length * 4));
+}
+
+export async function resolveEmbed(embed, get = fetch) {
+  const url = new URL(embed);
+  if (url.protocol !== 'https:' || url.hostname !== 'flixcloud.cc' || !/^\/e\/[a-zA-Z0-9_-]+$/.test(url.pathname) || !['1', '2'].includes(url.searchParams.get('v')))
+    throw new Error('Expected a FlixCloud episode link');
+  const headers = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://reanime.to/' };
+  const page = await get(url, { headers });
+  if (!page.ok) throw new Error(`FlixCloud episode returned HTTP ${page.status}`);
+  const data = pageData(await page.text());
+  const seed = data.obfuscation_seed;
+  if (typeof seed !== 'string' || !/^[a-f0-9]{8,}$/i.test(seed)) throw new Error('Missing FlixCloud seed');
+  const fields = names(seed);
+  const inner = data.obfuscated_crypto_data?.[fields.container]?.[fields.array]?.[0]?.[fields.object];
+  const token = data[fields.token];
+  if (!inner || typeof token !== 'string' || !/^[\w.-]+$/.test(token)) throw new Error('FlixCloud changed its token data');
+  const tokenReply = await get(`https://flixcloud.cc/api/m3u8/${token}`, { headers });
+  if (!tokenReply.ok) throw new Error(`FlixCloud token returned HTTP ${tokenReply.status}`);
+  const payload = await tokenReply.json();
+  const encrypted = binary(payload[hash(token + 'vid').slice(0, 10)]);
+  const third = binary(payload[hash(token + 'key').slice(0, 10)]);
+  const transformed = await transform(data.w_payload, binary(inner[fields.fragment]), binary(data[fields.otherFragment]), third, seed);
+  const material = crypto.pbkdf2Sync(transformed, seed, 1000, 32, 'sha256');
+  for (let i = 0; i < material.length; i++) material[i] ^= seed.charCodeAt(i % seed.length);
+  const key = crypto.createHash('sha256').update(material).digest();
+  const decrypt = crypto.createDecipheriv('aes-256-cbc', key, binary(inner[fields.iv]));
+  const stream = Buffer.concat([decrypt.update(encrypted), decrypt.final()]).toString('utf8').trim();
+  const streamURL = new URL(stream);
+  if (streamURL.protocol !== 'https:' || !streamURL.hostname.endsWith('.flixcloud.cc')) throw new Error('Untrusted FlixCloud media host');
+  return { stream, playlistKey: data.playlist_key ?? payload.playlist_key ?? data.key ?? payload.key ?? null };
+}

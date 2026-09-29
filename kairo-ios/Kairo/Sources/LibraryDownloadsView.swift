@@ -93,7 +93,9 @@ struct SourcesView: View {
     @AppStorage("playerSeekLong") private var longSeek = 85
     @State private var sourceLink = ""
     @State private var reanimeLink = ""
-    @State private var reanimePlayback: ReAnimePlayback?
+    @AppStorage("reanimeGatewayURL") private var reanimeGatewayURL = ""
+    @AppStorage("reanimeGatewayKey") private var reanimeGatewayKey = ""
+    @State private var reanimeDestination: ReAnimeDestination?
     @State private var reanimeLinkError: String?
     @State private var manifestMessage: String?
     @State private var inspecting = false
@@ -119,9 +121,19 @@ struct SourcesView: View {
             Section {
                 Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
                 Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
-                Text("ReAnime is built in. Select it in Discover to search its catalog and play episodes using the site's servers inside Kairo.")
+                Text("ReAnime is built in. Native playback and offline saving need a configured media gateway.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Sources") }
+            Section("ReAnime native media") {
+                TextField("https://your-gateway.example", text: $reanimeGatewayURL)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                SecureField("Gateway access key", text: $reanimeGatewayKey)
+                if !reanimeGatewayURL.isEmpty && ReAnimeAPI.gatewayURL(reanimeGatewayURL) == nil {
+                    Text("Enter an HTTPS gateway address without a query or fragment.").font(.caption).foregroundStyle(.red)
+                }
+                Text("The gateway resolves ReAnime servers and serves standard HLS to Kairo's player and downloader. See REANIME_NATIVE.md for setup. Your playback requests pass through that gateway.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 Picker("Browse in Discover", selection: $discoverySource) {
                     ForEach(DiscoverySource.allCases) { source in Text(source.name).tag(source.rawValue) }
@@ -147,7 +159,8 @@ struct SourcesView: View {
                     Task {
                         do {
                             let resolved = try await ReAnimeAPI.shared.resolve(anime)
-                            reanimePlayback = ReAnimePlayback(anime: resolved, episode: episode, audio: audio)
+                            store.state.preferences.audio = audio; store.save()
+                            reanimeDestination = ReAnimeDestination(anime: resolved, episode: episode)
                         } catch { reanimeLinkError = error.localizedDescription }
                     }
                 }.disabled(reanimeLink.isEmpty)
@@ -197,7 +210,9 @@ struct SourcesView: View {
             }
             Section("Your data") { Text("Your library, history and download records are saved on this device. Catalog searches contact AniList or the enabled source. Episode details also use MyAnimeList metadata through Jikan; media comes from the provider you select.").font(.caption) }
         }.navigationTitle("Sources & preferences")
-            .fullScreenCover(item: $reanimePlayback) { ReAnimePlayer(request: $0) }
+            .sheet(item: $reanimeDestination) { item in
+                NavigationStack { AnimeDetailView(anime: item.anime, initialEpisode: item.episode) }
+            }
     }
     @MainActor private func inspect() async {
         guard let url = WebAddress.media(sourceLink.trimmingCharacters(in: .whitespacesAndNewlines)) else { manifestMessage = "Enter a public HTTPS manifest link."; return }
@@ -210,4 +225,10 @@ struct SourcesView: View {
             sourceLink = ""
         } catch { manifestMessage = error.localizedDescription }
     }
+}
+
+private struct ReAnimeDestination: Identifiable {
+    let id = UUID()
+    let anime: Anime
+    let episode: Int
 }
