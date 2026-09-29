@@ -76,7 +76,7 @@ const reply = (res, status, data, type = 'application/json') => {
 export function createGateway(resolve = resolveEmbed) {
   return http.createServer(async (req, res) => {
     try {
-      if (req.method !== 'GET') { reply(res, 405, '{}'); return; }
+      if (!['GET', 'HEAD'].includes(req.method)) { reply(res, 405, '{}'); return; }
       const request = new URL(req.url, 'http://localhost');
       if (request.pathname === '/health') { reply(res, 200, JSON.stringify({ ready: true })); return; }
       if (request.pathname === '/resolve') {

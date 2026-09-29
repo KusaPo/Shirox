@@ -54,6 +54,9 @@ test('gateway serves signed HLS playlists and segment bytes', async () => {
     assert.equal(resolve.status, 200);
     const master = new URL((await resolve.json()).url);
     assert.equal(master.hostname, 'media.example.com');
+    const head = await originalFetch(`${local}${master.pathname}${master.search}`, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get('content-type'), 'application/vnd.apple.mpegurl');
     const playlist = await originalFetch(`${local}${master.pathname}${master.search}`);
     assert.equal(playlist.status, 200);
     const segment = new URL((await playlist.text()).split('\n').find(line => line.startsWith('https:')));
