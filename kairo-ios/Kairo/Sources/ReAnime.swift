@@ -1,6 +1,4 @@
 import Foundation
-import SwiftUI
-import WebKit
 
 struct ReAnimeEpisode {
     var number: Int
@@ -24,6 +22,14 @@ struct ReAnimeServer: Identifiable {
 actor ReAnimeAPI {
     static let shared = ReAnimeAPI()
     static let moduleID = "builtin:reanime"
+    // A media gateway is required because /api/flix only returns embed pages.
+    // The gateway must serve ordinary HLS playlists and segments over HTTPS.
+    static func gatewayURL(_ value: String) -> URL? {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
+              (url.path.isEmpty || url.path == "/"), url.query == nil, url.fragment == nil else { return nil }
+        return url
+    }
     private let session: URLSession
     init(configuration provided: URLSessionConfiguration? = nil) {
         let configuration = provided ?? URLSessionConfiguration.ephemeral
@@ -179,210 +185,47 @@ actor ReAnimeAPI {
     func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
         let listed = try await servers(anime, episode: episode).filter { $0.audio == audio }
         guard !listed.isEmpty else { throw KairoError.message("ReAnime lists no \(audio.label) player for episode \(episode). Try the other language.") }
-        return listed.map { server in
-            StreamOption(id: server.id, provider: server.id, url: server.url, headers: [:], audio: audio,
-                         label: "ReAnime · \(server.name) · \(audio.shortLabel)")
+        guard let gateway = Self.gatewayURL(UserDefaults.standard.string(forKey: "reanimeGatewayURL") ?? "") else {
+            throw KairoError.message("ReAnime native playback needs a media gateway. Set its HTTPS address in Sources & preferences.")
         }
-    }
-}
-
-struct ReAnimePlayback: Identifiable {
-    let id = UUID()
-    let anime: Anime
-    let episode: Int
-    let audio: AudioChoice
-    var preferredServerID: String? = nil
-}
-
-struct ReAnimePlayer: View {
-    let request: ReAnimePlayback
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var store: AppStore
-    @AppStorage("playerAutoPlayNext") private var autoPlayNext = false
-    @State private var episode: Int
-    @State private var audio: AudioChoice
-    @State private var servers: [ReAnimeServer] = []
-    @State private var selected: ReAnimeServer?
-    @State private var error: String?
-    @State private var loading = true
-    @State private var playerLoading = true
-    @State private var playerError: String?
-    @State private var watchedSeconds = 0.0
-    @State private var watchedDuration = 0.0
-    init(request: ReAnimePlayback) {
-        self.request = request
-        _episode = State(initialValue: request.episode)
-        _audio = State(initialValue: request.audio)
-    }
-    private var available: [ReAnimeServer] { servers.filter { $0.audio == audio } }
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                Text("\(request.anime.title) · Episode \(episode)").lineLimit(1).font(.subheadline.bold())
-                Spacer()
-            }.padding(.horizontal, 8)
-            ZStack {
-                Color.black
-                if let selected {
-                    ReAnimeWebView(url: selected.url, loading: $playerLoading, problem: $playerError,
-                                   referer: ReAnimeAPI.watchURL(request.anime, episode: episode, audio: audio),
-                                   resumeAt: watchedSeconds > 5 ? watchedSeconds : (store.progress(request.anime, episode: episode).flatMap { $0.finished ? nil : $0.seconds } ?? 0),
-                                   onProgress: { seconds, duration, ended in
-                                       watchedSeconds = seconds; watchedDuration = duration
-                                       store.record(request.anime, episode: episode, seconds: seconds, duration: duration, finished: ended)
-                                       if ended && autoPlayNext && episode < (request.anime.episodeCount ?? episode) { episode += 1 }
-                                   })
-                        .id(selected.id).ignoresSafeArea(edges: .bottom)
-                    if playerLoading { ProgressView("Loading player…").tint(.white) }
-                } else if loading { ProgressView("Finding episode player…").tint(.white) }
-                else { ContentUnavailableView("No player", systemImage: "play.slash", description: Text(error ?? "No \(audio.shortLabel) server is available.")) }
-            }
-            if let playerError { Text(playerError).font(.caption).foregroundStyle(.orange).padding(8) }
-            if watchedDuration > 0 {
-                ProgressView(value: min(watchedSeconds, watchedDuration), total: watchedDuration)
-                    .tint(Theme.purple).padding(.horizontal, 12)
-            }
-            HStack {
-                Picker("Language", selection: $audio) {
-                    ForEach(AudioChoice.allCases) { choice in
-                        if servers.contains(where: { $0.audio == choice }) { Text(choice.shortLabel).tag(choice) }
-                    }
-                }.pickerStyle(.segmented).frame(maxWidth: 160)
-                Picker("Server", selection: Binding(get: { selected?.id ?? "" }, set: { id in selected = available.first { $0.id == id } })) {
-                    ForEach(available) { server in Text(server.name).tag(server.id) }
-                }.frame(maxWidth: 130)
-                Spacer()
-                Button { episode -= 1 } label: { Image(systemName: "backward.end.fill") }
-                    .disabled(episode <= 1)
-                Button { episode += 1 } label: { Image(systemName: "forward.end.fill") }
-                    .disabled(episode >= (request.anime.episodeCount ?? episode))
-            }.padding(12)
-            if let url = ReAnimeAPI.watchURL(request.anime, episode: episode, audio: audio) {
-                Link("Open original player if this server fails", destination: url)
-                    .font(.caption).padding(.bottom, 12)
-            }
-        }
-        .foregroundStyle(.white).background(.black).tint(Theme.purple)
-        .task(id: episode) {
-            loading = true; selected = nil; error = nil; servers = []
-            watchedSeconds = 0; watchedDuration = 0
+        var results: [StreamOption] = []
+        var lastError: Error?
+        for server in listed {
             do {
-                let result = try await ReAnimeAPI.shared.servers(request.anime, episode: episode)
-                try Task.checkCancellation()
-                servers = result
-                if !result.contains(where: { $0.audio == audio }), let first = result.first { audio = first.audio }
-                selected = result.first { $0.id == request.preferredServerID && $0.audio == audio }
-                    ?? result.first { $0.audio == audio }
-                if selected == nil { error = "ReAnime returned no playable server." }
-            } catch is CancellationError { }
-            catch { self.error = error.localizedDescription }
-            loading = false
+                let media = try await nativeStream(server, gateway: gateway)
+                results.append(StreamOption(id: server.id, provider: server.id, url: media, headers: [:], audio: audio,
+                                            label: "ReAnime · \(server.name) · \(audio.shortLabel)"))
+            } catch { lastError = error }
         }
-        .onChange(of: audio) { _, choice in selected = servers.first { $0.audio == choice }; playerError = nil; playerLoading = true }
+        guard !results.isEmpty else { throw lastError ?? KairoError.message("No native ReAnime stream is available.") }
+        return results
+    }
+
+    private func nativeStream(_ server: ReAnimeServer, gateway: URL) async throws -> URL {
+        var parts = URLComponents(url: gateway.appendingPathComponent("resolve"), resolvingAgainstBaseURL: false)!
+        parts.queryItems = [URLQueryItem(name: "embed", value: server.url.absoluteString)]
+        var request = URLRequest(url: parts.url!)
+        if let access = UserDefaults.standard.string(forKey: "reanimeGatewayKey"), !access.isEmpty {
+            request.setValue(access, forHTTPHeaderField: "X-Kairo-Access")
+        }
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              data.count < 16_384, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = object["url"] as? String, let url = URL(string: raw),
+              url.scheme == "https", url.host == gateway.host, url.pathExtension.lowercased() == "m3u8" else {
+            throw KairoError.message("The ReAnime gateway did not return a usable HTTPS HLS stream.")
+        }
+        var probe = URLRequest(url: url)
+        probe.timeoutInterval = 15
+        let (manifest, manifestResponse) = try await session.data(for: probe)
+        try Task.checkCancellation()
+        guard (manifestResponse as? HTTPURLResponse)?.statusCode == 200,
+              manifest.count < 1_000_000,
+              String(data: manifest.prefix(32), encoding: .utf8)?.hasPrefix("#EXTM3U") == true else {
+            throw KairoError.message("The ReAnime gateway did not supply an iOS-compatible HLS playlist.")
+        }
+        return url
     }
 }
 
-struct ReAnimePage: Identifiable {
-    let id = UUID()
-    let url: URL
-    let title: String
-}
-
-struct ReAnimeBrowser: View {
-    let page: ReAnimePage
-    @Environment(\.dismiss) private var dismiss
-    @State private var loading = true
-    @State private var problem: String?
-    var body: some View {
-        ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
-            ReAnimeWebView(url: page.url, loading: $loading, problem: $problem).ignoresSafeArea(edges: .bottom)
-            if loading { ProgressView("Opening ReAnime…").tint(.white).padding(12)
-                .background(.black.opacity(0.8), in: Capsule()).padding(.top, 62) }
-            if let problem {
-                VStack(spacing: 10) {
-                    Text(problem).multilineTextAlignment(.center)
-                    Button("Close") { dismiss() }.buttonStyle(.borderedProminent)
-                }.padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18)).padding(.top, 95)
-            }
-        }
-        .safeAreaInset(edge: .top) {
-            HStack {
-                Button { dismiss() } label: { Label("Close", systemImage: "xmark") }
-                Spacer()
-                Text(page.title).font(.caption.weight(.semibold)).lineLimit(1)
-            }.padding(12).background(.ultraThinMaterial)
-        }
-    }
-}
-
-struct ReAnimeWebView: UIViewRepresentable {
-    let url: URL
-    @Binding var loading: Bool
-    @Binding var problem: String?
-    var referer: URL? = nil
-    var resumeAt: Double = 0
-    var onProgress: ((Double, Double, Bool) -> Void)? = nil
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-        var owner: ReAnimeWebView
-        init(_ owner: ReAnimeWebView) { self.owner = owner }
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "kairoPlayback", let value = message.body as? [String: Any],
-                  let seconds = (value["seconds"] as? NSNumber)?.doubleValue,
-                  let duration = (value["duration"] as? NSNumber)?.doubleValue,
-                  seconds.isFinite, duration.isFinite, duration > 0 else { return }
-            let ended = value["ended"] as? Bool ?? false
-            DispatchQueue.main.async { self.owner.onProgress?(seconds, duration, ended) }
-        }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { owner.loading = false }
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            owner.loading = false; owner.problem = error.localizedDescription
-        }
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            owner.loading = false; owner.problem = error.localizedDescription
-        }
-    }
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.allowsInlineMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = []
-        if onProgress != nil {
-            configuration.userContentController.add(context.coordinator, name: "kairoPlayback")
-            let start = resumeAt.isFinite && resumeAt > 5 && resumeAt < 360_000 ? resumeAt : 0
-            let script = """
-            (() => {
-              let last = -1;
-              let resumed = false;
-              const resumeAt = \(start);
-              setInterval(() => {
-                const video = document.querySelector('video');
-                if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
-                if (!resumed) {
-                  resumed = true;
-                  if (resumeAt > 5 && resumeAt < video.duration - 10) video.currentTime = resumeAt;
-                }
-                const seconds = video.currentTime;
-                if (!Number.isFinite(seconds) || (Math.abs(seconds - last) < 2 && !video.ended)) return;
-                last = seconds;
-                window.webkit.messageHandlers.kairoPlayback.postMessage({seconds, duration: video.duration, ended: video.ended});
-              }, 3000);
-            })();
-            """
-            configuration.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        }
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        view.navigationDelegate = context.coordinator
-        view.scrollView.contentInsetAdjustmentBehavior = .automatic
-        var request = URLRequest(url: url)
-        if let referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
-        view.load(request)
-        return view
-    }
-    func updateUIView(_ uiView: WKWebView, context: Context) { context.coordinator.owner = self }
-    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "kairoPlayback")
-        uiView.stopLoading()
-    }
-}
