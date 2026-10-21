@@ -20,7 +20,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store).environmentObject(downloads)
+            Group {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--normal-app") {
+                    RootView()
+                } else {
+                    GlassDesignPrototype()
+                }
+                #else
+                RootView()
+                #endif
+            }.environmentObject(store).environmentObject(downloads)
                 .tint(Theme.purple)
                 .preferredColorScheme(appearance.colorScheme)
                 .alert("Storage needs attention", isPresented: Binding(get: { store.storageError != nil }, set: { if !$0 { store.storageError = nil } })) {
