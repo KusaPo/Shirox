@@ -43,7 +43,7 @@ struct DownloadsView: View {
         List {
             Section {
                 Label(availableStorage, systemImage: "internaldrive")
-                Text("Up to two transfers at a time. Wi-Fi preference applies when each new transfer starts.").font(.caption).foregroundStyle(.secondary)
+                Text("Keep Kairo open for HLS downloads. Completed segments are kept when paused; server limits retry automatically.").font(.caption).foregroundStyle(.secondary)
             }
             if store.state.downloads.isEmpty { ContentUnavailableView("Take a story with you", systemImage: "arrow.down.circle", description: Text("Open a title and tap the download button beside an episode.")) }
             ForEach(titles) { anime in
@@ -110,6 +110,11 @@ struct SourcesView: View {
                         Text("Your next adventure").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }.padding(.vertical, 4)
+            }
+            Section("Open-source acknowledgements") {
+                Text("Required Notice: Copyright 2026 xibrox (https://github.com/xibrox/Shirox)")
+                    .font(.caption)
+                Link("HLS parser · PolyForm Noncommercial 1.0.0", destination: URL(string: "https://polyformproject.org/licenses/noncommercial/1.0.0/")!)
             }
             Section {
                 Picker("Appearance", selection: $appearance) {
