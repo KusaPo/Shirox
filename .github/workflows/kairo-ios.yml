@@ -9,7 +9,6 @@ permissions:
   contents: read
 jobs:
   build-device-ipa:
-    if: ${{ !startsWith(github.head_ref, 'prototype/') }}
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -17,7 +16,7 @@ jobs:
       - name: Archive and validate iPhone IPA
         run: |
           set -o pipefail
-          bash kairo-ios/scripts/build_ipa.sh "$RUNNER_TEMP/kairo-ipa" 2>&1 | tee "$RUNNER_TEMP/kairo-ipa-build.log"
+          bash kairo-ios/scripts/build_ipa.sh "$RUNNER_TEMP/kairo-ipa" "${{ startsWith(github.head_ref, 'prototype/') && 'Debug' || 'Release' }}" 2>&1 | tee "$RUNNER_TEMP/kairo-ipa-build.log"
       - name: Upload IPA for AltStore
         uses: actions/upload-artifact@v4
         with:
