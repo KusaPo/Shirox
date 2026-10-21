@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         WindowGroup {
             Group {
                 #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("--normal-app") {
+                if !ProcessInfo.processInfo.arguments.contains("--design-preview") {
                     RootView().preferredColorScheme(appearance.colorScheme)
                 } else {
                     GlassDesignPrototype()
@@ -64,21 +64,24 @@ enum KairoTab: Hashable { case home, discover, library, downloads, settings }
 
 struct RootView: View {
     @State private var selectedTab: KairoTab = .home
+    @AppStorage("appDesign") private var design: AppDesign = .cinema
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack { HomeView(selectedTab: $selectedTab) }
-                .tabItem { Label("Home", systemImage: "house.fill") }.tag(KairoTab.home)
+                .tabItem { Label(KairoTab.home.title, systemImage: KairoTab.home.icon) }.tag(KairoTab.home)
             NavigationStack { DiscoverView() }
-                .tabItem { Label("Discover", systemImage: "magnifyingglass") }.tag(KairoTab.discover)
+                .tabItem { Label(KairoTab.discover.title, systemImage: KairoTab.discover.icon) }.tag(KairoTab.discover)
             NavigationStack { LibraryView() }
-                .tabItem { Label("Library", systemImage: "books.vertical.fill") }.tag(KairoTab.library)
+                .tabItem { Label(KairoTab.library.title, systemImage: KairoTab.library.icon) }.tag(KairoTab.library)
             NavigationStack { DownloadsView() }
-                .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }.tag(KairoTab.downloads)
+                .tabItem { Label(KairoTab.downloads.title, systemImage: KairoTab.downloads.icon) }.tag(KairoTab.downloads)
             NavigationStack { SourcesView() }
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }.tag(KairoTab.settings)
+                .tabItem { Label(KairoTab.settings.title, systemImage: KairoTab.settings.icon) }.tag(KairoTab.settings)
         }
-        .toolbarBackground(.ultraThinMaterial, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
+        .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            GlassNavigationDock(selection: $selectedTab, design: design)
+        }
     }
 }
 

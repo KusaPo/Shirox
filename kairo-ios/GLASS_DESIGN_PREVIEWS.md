@@ -1,3 +1,13 @@
+# App designs
+
+Glass Cinema is now the default in the working app. Settings → App design offers Glass Cinema, Split Island, and Editorial. The selection is saved on this device and updates the home layout and floating navigation immediately. Light/Dark/System remains a separate saved preference.
+
+The home designs use the live catalog and saved watching progress. Library, Discover, Settings, and Downloads remain connected to the working app. Split Island exposes Settings through the profile button on Home. Release IPAs open this working app.
+
+The original sample-data playground remains available in Debug builds only: pass `--design-preview` in the Xcode scheme launch arguments. It is for comparing the original concepts; its choices do not change the saved app design.
+
+## Original prototype notes
+
 # Kairo glass design playground
 
 Question: which floating navigation and content hierarchy should Kairo adopt?

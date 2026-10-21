@@ -82,6 +82,7 @@ struct DownloadsView: View {
 }
 
 struct SourcesView: View {
+    @AppStorage("appDesign") private var design: AppDesign = .cinema
     @ObservedObject private var registry = ModuleRegistry.shared
     @EnvironmentObject private var store: AppStore
     @AppStorage("appearance") private var appearance: AppAppearance = .system
@@ -115,6 +116,24 @@ struct SourcesView: View {
                 Text("Required Notice: Copyright 2026 xibrox (https://github.com/xibrox/Shirox)")
                     .font(.caption)
                 Link("HLS parser · PolyForm Noncommercial 1.0.0", destination: URL(string: "https://polyformproject.org/licenses/noncommercial/1.0.0/")!)
+            }
+            Section {
+                ForEach(AppDesign.allCases) { option in
+                    Button { design = option } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                Text(option.subtitle).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: design == option ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(design == option ? Theme.purple : Color.secondary)
+                        }.padding(.vertical, 5)
+                    }.buttonStyle(.plain)
+                        .accessibilityAddTraits(design == option ? .isSelected : [])
+                }
+            } header: { Text("App design") } footer: {
+                Text("Changes apply immediately and are saved for your next launch.")
             }
             Section {
                 Picker("Appearance", selection: $appearance) {
