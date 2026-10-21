@@ -222,7 +222,14 @@ actor HLSDownloadTransfer {
             }
             manifests["playlist.m3u8"] = HLSManifestParser.localMasterManifest(videoPlaylist: "video.m3u8", audio: localAudio, bandwidth: choice.bandwidth, codecs: choice.codecs)
         } else { manifests["playlist.m3u8"] = videoText }
-        for index in resources.indices { resources[index].complete = resources[index].exists(in: folder) }
+        for index in resources.indices {
+            resources[index].complete = resources[index].exists(in: folder)
+            if resources[index].complete {
+                for name in [resources[index].name, resources[index].name + ".sha256"] {
+                    try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: folder.appendingPathComponent(name).path)
+                }
+            }
+        }
         return BackgroundHLSJob(id: id, wifiOnly: wifiOnly, headers: headers, resources: resources, manifests: manifests)
     }
     private func backgroundResource(_ url: URL, name: String, range: HLSByteRange?, key: HLSKey?, sequence: Int, headers: [String: String]) async throws -> BackgroundHLSResource {

@@ -54,6 +54,7 @@ struct BackgroundHLSJob: Codable {
     var manifests: [String: String]
     var paused = false
     var failure: String?
+    var notBefore: [String: Date] = [:]
     var fraction: Double { resources.isEmpty ? 0 : Double(resources.filter(\.complete).count) / Double(resources.count) }
     func finish(in folder: URL) throws -> URL {
         guard !resources.isEmpty, resources.allSatisfy({ $0.complete && $0.exists(in: folder) }) else {
@@ -197,7 +198,7 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
                 let task = (job.wifiOnly ? wifi : any).downloadTask(with: request)
                 let token = "\(id.uuidString)/\(i)/\(UUID().uuidString)"
                 task.taskDescription = token; jobs[id]?.resources[i].token = token
-                let earliest = max(Date(), nextAllowed[host] ?? .distantPast)
+                let earliest = max(Date(), nextAllowed[host] ?? .distantPast, job.notBefore[host] ?? .distantPast)
                 task.earliestBeginDate = earliest
                 nextAllowed[host] = earliest.addingTimeInterval(0.25)
                 live[token] = task
@@ -233,6 +234,7 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
             // Cancel/requeue this host's pending batch so existing queued requests also cool down.
             let affected = jobs.values.filter { $0.resources.contains { !$0.complete && $0.url.host == host } }.map(\.id)
             for affectedID in affected {
+                jobs[affectedID]?.notBefore[host] = Date().addingTimeInterval(delay)
                 for index in jobs[affectedID]!.resources.indices where jobs[affectedID]!.resources[index].url.host == host && !jobs[affectedID]!.resources[index].complete {
                     if let old = jobs[affectedID]?.resources[index].token { live.removeValue(forKey: old)?.cancel() }
                     jobs[affectedID]?.resources[index].token = nil
