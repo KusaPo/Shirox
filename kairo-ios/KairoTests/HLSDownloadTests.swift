@@ -97,12 +97,15 @@ final class HLSDownloadTests: XCTestCase {
     func testCancellationReleasesTheSharedHostLane() async throws {
         let gate = DownloadHostGate()
         let url = origin
+        let entered = expectation(description: "Transport has acquired the shared lane")
         let client = DownloadHTTPClient(gate: gate, transport: { _ in
+            entered.fulfill()
             try await Task.sleep(for: .seconds(60))
             return (Data([1]), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
         let task = Task { try await client.fetch(url, headers: [:]) }
-        await Task.yield(); task.cancel()
+        await fulfillment(of: [entered], timeout: 2)
+        task.cancel()
         do { _ = try await task.value; XCTFail("Cancelled transfer must throw") } catch { }
         // A cancelled transfer must leave the lane available to another episode.
         let next = DownloadHTTPClient(gate: gate, transport: { request in

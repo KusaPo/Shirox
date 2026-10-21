@@ -154,15 +154,14 @@ enum HLSManifestParser {
         var audio: [HLSAudioRendition] = []
         if let group = best.attrs["AUDIO"] {
             var seen = Set<URL>()
-            audio = lines.filter { $0.hasPrefix("#EXT-X-MEDIA:") }
-                .map { parseAttributes(String($0.dropFirst("#EXT-X-MEDIA:".count))) }
-                .filter { $0["TYPE"] == "AUDIO" && $0["GROUP-ID"] == group }
-                .compactMap { attrs in
-                    guard let url = attrs["URI"].flatMap({ URL(string: $0, relativeTo: baseURL)?.absoluteURL }),
-                          seen.insert(url).inserted else { return nil }
-                    return HLSAudioRendition(url: url, name: attrs["NAME"] ?? "Audio",
-                                             language: attrs["LANGUAGE"], isDefault: attrs["DEFAULT"] == "YES")
-                }
+            for line in lines where line.hasPrefix("#EXT-X-MEDIA:") {
+                let attrs = parseAttributes(String(line.dropFirst("#EXT-X-MEDIA:".count)))
+                guard attrs["TYPE"] == "AUDIO", attrs["GROUP-ID"] == group,
+                      let uri = attrs["URI"], let url = URL(string: uri, relativeTo: baseURL)?.absoluteURL,
+                      seen.insert(url).inserted else { continue }
+                audio.append(HLSAudioRendition(url: url, name: attrs["NAME"] ?? "Audio",
+                                               language: attrs["LANGUAGE"], isDefault: attrs["DEFAULT"] == "YES"))
+            }
         }
         return HLSVariantChoice(video: best.url, audioRenditions: audio, bandwidth: best.bandwidth,
                                 codecs: best.attrs["CODECS"])

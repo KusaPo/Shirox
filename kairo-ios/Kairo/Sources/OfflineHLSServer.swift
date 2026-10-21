@@ -1,6 +1,18 @@
 import Foundation
 import Network
 
+private final class OfflineListenerStartup: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<UInt16, Error>?
+    init(_ continuation: CheckedContinuation<UInt16, Error>) { self.continuation = continuation }
+    func finish(_ result: Result<UInt16, Error>) {
+        lock.lock()
+        let waiting = continuation; continuation = nil
+        lock.unlock()
+        waiting?.resume(with: result)
+    }
+}
+
 /// AVPlayer reads local HLS over loopback; only registered episode directories are exposed.
 /// A random per-process capability and loopback binding keep files off the LAN.
 @MainActor final class OfflineHLSServer {
@@ -34,18 +46,16 @@ import Network
                 Self.read(connection, bytes: Data(), root: root, token: token)
             }
             return try await withCheckedThrowingContinuation { continuation in
-                var completed = false
+                let startup = OfflineListenerStartup(continuation)
                 server.stateUpdateHandler = { state in
                     switch state {
                     case .ready:
-                        guard !completed, let port = server.port else { return }
-                        completed = true; continuation.resume(returning: port.rawValue)
+                        guard let port = server.port else { return }
+                        startup.finish(.success(port.rawValue))
                     case .failed(let error):
-                        guard !completed else { return }
-                        completed = true; continuation.resume(throwing: error)
+                        startup.finish(.failure(error))
                     case .cancelled:
-                        guard !completed else { return }
-                        completed = true; continuation.resume(throwing: CancellationError())
+                        startup.finish(.failure(CancellationError()))
                     default: break
                     }
                 }
