@@ -44,11 +44,11 @@ private extension View {
             self.glassEffect(.regular.interactive(), in: shape)
         } else {
             self.background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 0.6))
+                .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 0.6).allowsHitTesting(false))
         }
         #else
         self.background(.ultraThinMaterial, in: shape)
-            .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 0.6))
+            .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 0.6).allowsHitTesting(false))
         #endif
     }
 }

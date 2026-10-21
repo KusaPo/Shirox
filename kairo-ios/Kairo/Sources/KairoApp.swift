@@ -23,16 +23,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             Group {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("--normal-app") {
-                    RootView()
+                    RootView().preferredColorScheme(appearance.colorScheme)
                 } else {
                     GlassDesignPrototype()
                 }
                 #else
-                RootView()
+                RootView().preferredColorScheme(appearance.colorScheme)
                 #endif
             }.environmentObject(store).environmentObject(downloads)
                 .tint(Theme.purple)
-                .preferredColorScheme(appearance.colorScheme)
                 .alert("Storage needs attention", isPresented: Binding(get: { store.storageError != nil }, set: { if !$0 { store.storageError = nil } })) {
                     Button("OK") { store.storageError = nil }
                 } message: { Text(store.storageError ?? "") }
