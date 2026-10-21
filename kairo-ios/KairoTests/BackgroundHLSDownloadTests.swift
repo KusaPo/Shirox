@@ -50,7 +50,7 @@ final class BackgroundHLSDownloadTests: XCTestCase {
         let restored = try JSONDecoder().decode(BackgroundHLSJob.self, from: JSONEncoder().encode(job))
         XCTAssertEqual(restored.fraction, 1)
         let local = try restored.finish(in: root)
-        XCTAssertTrue(try String(contentsOf: local).contains("#EXT-X-ENDLIST"))
+        XCTAssertTrue(try String(contentsOf: local, encoding: .utf8).contains("#EXT-X-ENDLIST"))
         try FileManager.default.removeItem(at: root.appendingPathComponent(item.name))
         XCTAssertThrowsError(try restored.finish(in: root))
     }
@@ -93,7 +93,17 @@ extension BackgroundHLSDownloadTests {
 
 
 extension BackgroundHLSDownloadTests {
-    @MainActor func testSystemBackgroundSessionDownloadsPersistedEpisodeBatch() async throws {
+    @MainActor func testDelegatePipelineDownloadsPersistedEpisodeBatch() async throws {
+        try await exerciseEpisodeBatch(systemSession: false)
+    }
+    @MainActor func testDeviceBackgroundServiceDownloadsPersistedEpisodeBatch() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Physical iPhone check: the CI simulator reports remote background session unavailable. The delegate pipeline runs separately with real HTTP transfers.")
+        #else
+        try await exerciseEpisodeBatch(systemSession: true)
+        #endif
+    }
+    @MainActor private func exerciseEpisodeBatch(systemSession: Bool) async throws {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Kairo/Downloads/" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -112,7 +122,8 @@ extension BackgroundHLSDownloadTests {
         store.state.downloads = [record]
         let target = root.appendingPathComponent(record.id.uuidString)
         let job = try await HLSDownloadTransfer(client: DownloadHTTPClient(wifiOnly: false)).prepareBackground(id: record.id, url: address, headers: [:], folder: target, wifiOnly: false)
-        let engine = BackgroundHLSDownload(store: store, root: root, sessionPrefix: "net.kusapo.kairo.test." + UUID().uuidString + ".")
+        let factory: ((String, Bool) -> URLSessionConfiguration)? = systemSession ? nil : { _, _ in URLSessionConfiguration.ephemeral }
+        let engine = BackgroundHLSDownload(store: store, root: root, sessionPrefix: "net.kusapo.kairo.test." + UUID().uuidString + ".", configurationFactory: factory)
         defer { engine.invalidateForTesting() }
         let restored = expectation(description: "Background sessions restored")
         engine.restore { restored.fulfill() }

@@ -13,3 +13,7 @@ Apple references:
 - https://developer.apple.com/documentation/foundation/urlsessiontask/earliestbegindate
 
 Validation covers durable job encoding, video/audio batch planning, byte ranges, incomplete downloads and rejected error responses, alongside the existing retry/offline-playback tests. A physical iPhone lock/switch test is still required: start an episode, wait for Downloading, lock for several minutes, then reopen and check that progress increased or it finished. Test offline playback afterward. Simulator checks do not prove locked-device behavior with a live provider.
+
+The CI iOS simulator reports “remote session unavailable” when creating a system background download. The same complete-episode delegate/journal integration test runs with an ephemeral session and real local HTTP transfers in CI. A separate background-service test runs on physical iPhones and is explicitly skipped in Simulator; a green simulator run is not evidence of locked-device behavior.
+
+Downloads show a percentage alongside their status, including paused/interrupted progress. Ready episodes show 100%; HLS percentages count completed media resources rather than exact byte totals.

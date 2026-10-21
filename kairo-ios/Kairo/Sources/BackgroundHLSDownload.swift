@@ -79,6 +79,7 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
     private let store: AppStore
     private let root: URL
     private let sessionPrefix: String
+    private let configurationFactory: ((String, Bool) -> URLSessionConfiguration)?
     private var journal: URL { root.appendingPathComponent("background-jobs.json") }
     private var jobs: [UUID: BackgroundHLSJob] = [:]
     private var live: [String: URLSessionDownloadTask] = [:]
@@ -89,8 +90,8 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
     private lazy var any = session(false)
     var activeIDs: Set<UUID> { Set(jobs.values.filter { !$0.paused && $0.failure == nil }.map(\.id)) }
     func contains(_ id: UUID) -> Bool { jobs[id] != nil }
-    init(store: AppStore, root: URL, sessionPrefix: String = BackgroundHLSDownload.prefix) {
-        self.store = store; self.root = root; self.sessionPrefix = sessionPrefix
+    init(store: AppStore, root: URL, sessionPrefix: String = BackgroundHLSDownload.prefix, configurationFactory: ((String, Bool) -> URLSessionConfiguration)? = nil) {
+        self.store = store; self.root = root; self.sessionPrefix = sessionPrefix; self.configurationFactory = configurationFactory
         super.init()
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
@@ -105,7 +106,8 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
     func invalidateForTesting() { wifi.invalidateAndCancel(); any.invalidateAndCancel() }
     #endif
     private func session(_ wifiOnly: Bool) -> URLSession {
-        let c = URLSessionConfiguration.background(withIdentifier: sessionPrefix + (wifiOnly ? "wifi" : "any"))
+        let identifier = sessionPrefix + (wifiOnly ? "wifi" : "any")
+        let c = configurationFactory?(identifier, wifiOnly) ?? URLSessionConfiguration.background(withIdentifier: identifier)
         c.allowsCellularAccess = !wifiOnly; c.waitsForConnectivity = true
         c.isDiscretionary = false; c.sessionSendsLaunchEvents = true
         c.httpMaximumConnectionsPerHost = 1

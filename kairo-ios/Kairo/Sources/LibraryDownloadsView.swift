@@ -73,8 +73,16 @@ struct DownloadsView: View {
                     Button { downloads.resume(item.id) } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }.accessibilityLabel("Resume or retry download")
                 }
             }
-            if item.state == .downloading { ProgressView(value: item.fraction) }
-            Text(item.state == .ready ? "Available offline" : item.state.label).font(.caption).foregroundStyle(Theme.purple)
+            if item.state == .downloading || (item.downloadFraction > 0 && item.state != .ready) {
+                ProgressView(value: item.downloadFraction)
+                    .accessibilityLabel("Download progress").accessibilityValue(item.percentage)
+            }
+            HStack {
+                Text(item.state == .ready ? "Available offline" : item.state.label)
+                Spacer()
+                Text(item.percentage).monospacedDigit().fontWeight(.semibold)
+                    .accessibilityLabel("\(item.percentage) downloaded")
+            }.font(.caption).foregroundStyle(Theme.purple)
             EpisodeWatchProgress(progress: store.progress(item.anime, episode: item.episode))
             if let message = item.message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }.swipeActions { Button("Remove", role: .destructive) { deletion = item } }
