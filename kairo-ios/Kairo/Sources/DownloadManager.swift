@@ -56,6 +56,11 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
         backgroundCompletions[identifier] = handler
         finishIfReady(identifier)
     }
+    static func beginBackgroundValidation(_ identifier: String) { validations[identifier, default: 0] += 1 }
+    static func endBackgroundValidation(_ identifier: String) {
+        validations[identifier, default: 0] -= 1
+        finishIfReady(identifier)
+    }
     static func finishedBackgroundEvents(_ identifier: String) {
         finishedSessions.insert(identifier)
         finishIfReady(identifier)

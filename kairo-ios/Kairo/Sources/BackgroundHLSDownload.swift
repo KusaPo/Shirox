@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 struct BackgroundHLSResource: Codable {
     var url: URL
@@ -84,6 +85,7 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
     private var jobs: [UUID: BackgroundHLSJob] = [:]
     private var live: [String: URLSessionDownloadTask] = [:]
     private var nextAllowed: [String: Date] = [:]
+    private var validationTokens: [UUID: UUID] = [:]
     private var readable = true
     var onChange: (() -> Void)?
     private lazy var wifi = session(true)
@@ -168,6 +170,7 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
         do { try persist() } catch { store.storageError = error.localizedDescription }
     }
     private func cancelTasks(_ id: UUID) {
+        validationTokens.removeValue(forKey: id)
         guard let job = jobs[id] else { return }
         for i in job.resources.indices {
             if let token = job.resources[i].token { live.removeValue(forKey: token)?.cancel() }
@@ -221,9 +224,27 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
         if job.resources.allSatisfy(\.complete) {
             do {
                 let local = try job.finish(in: folder(id))
-                guard let relative = LocalDownloadStorage.relativePath(for: local) else { throw KairoError.message("The saved download location is invalid.") }
-                store.updateDownload(id) { $0.relativePath = relative; $0.fraction = 1; $0.state = .ready; $0.message = nil }
-                jobs.removeValue(forKey: id); try persist(); onChange?()
+                guard validationTokens[id] == nil else { return }
+                let token = UUID(); validationTokens[id] = token
+                let identifier = sessionPrefix + (job.wifiOnly ? "wifi" : "any")
+                DownloadManager.beginBackgroundValidation(identifier)
+                store.updateDownload(id) { $0.state = .resolving; $0.fraction = 0.99; $0.message = "Checking saved episode…" }
+                Task { @MainActor [weak self] in
+                    defer { DownloadManager.endBackgroundValidation(identifier) }
+                    guard let self else { return }
+                    do {
+                        let playback = try await OfflineHLSServer.shared.playbackURL(for: local)
+                        guard try await AVURLAsset(url: playback).load(.isPlayable) else { throw KairoError.message("The saved episode could not be opened. Try another provider.") }
+                        guard self.validationTokens[id] == token, self.jobs[id] != nil else { return }
+                        guard let relative = LocalDownloadStorage.relativePath(for: local) else { throw KairoError.message("The saved download location is invalid.") }
+                        self.store.updateDownload(id) { $0.relativePath = relative; $0.fraction = 1; $0.state = .ready; $0.message = nil }
+                        self.validationTokens.removeValue(forKey: id)
+                        self.jobs.removeValue(forKey: id); try self.persist(); self.onChange?()
+                    } catch {
+                        guard self.validationTokens[id] == token else { return }
+                        self.fail(id, error.localizedDescription)
+                    }
+                }
             } catch { fail(id, error.localizedDescription) }
         } else {
             store.updateDownload(id) { $0.state = .downloading; $0.fraction = min(0.99, job.fraction) }

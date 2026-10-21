@@ -110,7 +110,7 @@ extension BackgroundHLSDownloadTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("source", isDirectory: true)
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
-        let bytes = Data([0x47, 1, 2, 3])
+        let bytes = Data(base64Encoded: HLSDownloadTests.video)!
         try bytes.write(to: source.appendingPathComponent("segment.ts"))
         let text = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n"
         let playlist = source.appendingPathComponent("playlist.m3u8")
