@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Combine
+import UIKit
 
 // Keep AVFoundation's factory result typed. Its private runtime session class
 // need not pass a dynamic downcast after being stored as a plain URLSession.
@@ -39,6 +40,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     private var preparing: [UUID: Task<Void, Never>] = [:]
     private var transferErrors: [UUID: String] = [:]
     private var restoring = true
+    private var foregroundObserver: AnyCancellable?
     static let prefix = "net.kusapo.kairo.download."
     private static let unrecognizedLocation = "Kairo couldn't recognize the saved download location: "
     private static var backgroundCompletions: [String: () -> Void] = [:]
@@ -59,6 +61,8 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     init(store: AppStore) {
         self.store = store
         super.init()
+        foregroundObserver = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.pump() }
         restore()
     }
 
@@ -133,7 +137,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     }
 
     private func pump() {
-        guard !restoring else { return }
+        guard !restoring, UIApplication.shared.applicationState != .background else { return }
         while tasks.values.filter({ $0.state == .running }).count + preparing.count < 2 {
             guard let item = store.state.downloads.first(where: { $0.state == .queued && preparing[$0.id] == nil }) else { return }
             if let task = tasks[item.id] {
@@ -166,38 +170,8 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             let wifiOnly = store.state.preferences.wifiOnly
             let task: URLSessionTask
             if stream.isHLS {
-                let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
-                guard try await asset.load(.isPlayable) else {
-                    throw KairoError.message("This provider's stream cannot be opened by iOS. Try another provider for this episode.")
-                }
-                let protected = try await asset.load(.hasProtectedContent)
-                guard !protected else {
-                    throw KairoError.message("This stream requires an offline content license. Kairo does not support downloading it.")
-                }
-                let duration = try await asset.load(.duration)
-                guard duration.seconds.isFinite, duration.seconds > 0 else {
-                    throw KairoError.message("iOS could not confirm a completed episode to save. Live or unfinished streams cannot be downloaded. Try another provider.")
-                }
-                let configuration = AVAssetDownloadConfiguration(asset: asset, title: "\(item.anime.title) · Episode \(item.episode)")
-                let preferredSelection = try await asset.load(.preferredMediaSelection)
-                // Save the selected embedded caption track, if offered. External subtitle URLs
-                // need a separate implementation and are not claimed to be downloaded.
-                if let selection = preferredSelection.mutableCopy() as? AVMutableMediaSelection {
-                    if let group = try await asset.loadMediaSelectionGroup(for: .audible),
-                       let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: item.audio.languageCode)).first {
-                        selection.select(option, in: group)
-                    }
-                    if let group = try await asset.loadMediaSelectionGroup(for: .legible),
-                       let english = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first {
-                        selection.select(english, in: group)
-                    }
-                    configuration.primaryContentConfiguration.mediaSelections = [selection]
-                } else {
-                    configuration.primaryContentConfiguration.mediaSelections = [preferredSelection]
-                }
-                try Task.checkCancellation()
-                let session = sessions.hls(wifiOnly: wifiOnly)
-                task = session.makeAssetDownloadTask(downloadConfiguration: configuration)
+                try await downloadHLS(item, stream: stream, wifiOnly: wifiOnly)
+                return
             } else {
                 var request = URLRequest(url: stream.url)
                 request.allHTTPHeaderFields = stream.headers
@@ -213,6 +187,56 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             guard !Task.isCancelled else { return }
             store.updateDownload(item.id) { $0.state = .interrupted; $0.message = Self.failureMessage(error, stage: "Preparing download") }
         }
+    }
+
+    @MainActor private func downloadHLS(_ item: DownloadRecord, stream: StreamOption, wifiOnly: Bool) async throws {
+        let folder = Self.segmentFolder(item.id)
+        var backgroundID = UIBackgroundTaskIdentifier.invalid
+        backgroundID = UIApplication.shared.beginBackgroundTask(withName: "Finish episode segment") { [weak self] in
+            guard let self else { return }
+            self.preparing[item.id]?.cancel()
+            self.store.updateDownload(item.id) {
+                $0.state = .paused
+                $0.message = "iOS paused this transfer. Open Kairo and tap resume; completed segments are saved."
+            }
+            if backgroundID != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundID)
+                backgroundID = .invalid
+            }
+        }
+        defer { if backgroundID != .invalid { UIApplication.shared.endBackgroundTask(backgroundID) } }
+        store.updateDownload(item.id) { $0.state = .downloading; $0.message = nil }
+        let transfer = HLSDownloadTransfer(client: DownloadHTTPClient(wifiOnly: wifiOnly))
+        let local = try await transfer.download(url: stream.url, headers: stream.headers, folder: folder,
+            onProgress: { [weak self] fraction in
+                Task { @MainActor in
+                    self?.store.updateDownload(item.id) {
+                        guard $0.state == .downloading else { return }
+                        $0.fraction = min(0.99, fraction); $0.message = nil
+                    }
+                }
+            }, onWait: { [weak self] seconds in
+                Task { @MainActor in
+                    self?.store.updateDownload(item.id) {
+                        guard $0.state == .downloading else { return }
+                        $0.message = "The server is busy. Retrying in at least \(Int(seconds.rounded(.up))) seconds; completed segments are saved."
+                    }
+                }
+            })
+        try Task.checkCancellation()
+        let playback = try await OfflineHLSServer.shared.playbackURL(for: local)
+        guard try await AVURLAsset(url: playback).load(.isPlayable) else {
+            throw KairoError.message("The saved episode could not be opened. Try another provider.")
+        }
+        try Task.checkCancellation()
+        guard let relative = LocalDownloadStorage.relativePath(for: local),
+              store.state.downloads.contains(where: { $0.id == item.id }) else { return }
+        store.updateDownload(item.id) { $0.relativePath = relative; $0.fraction = 1; $0.state = .ready; $0.message = nil }
+    }
+
+    private static func segmentFolder(_ id: UUID) -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Kairo/Downloads", isDirectory: true).appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
     private static func failureMessage(_ error: Error, stage: String) -> String {
@@ -246,6 +270,9 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
             do { if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) } }
             catch { store.updateDownload(id) { $0.message = "The file could not be deleted: \(error.localizedDescription)" }; return }
         }
+        let partial = Self.segmentFolder(id)
+        do { if FileManager.default.fileExists(atPath: partial.path) { try FileManager.default.removeItem(at: partial) } }
+        catch { store.updateDownload(id) { $0.message = "The saved segments could not be deleted: \(error.localizedDescription)" }; return }
         store.state.downloads.removeAll { $0.id == id }
         store.save()
         pump()
