@@ -67,7 +67,9 @@ struct GlassDesignPrototype: View {
     @State private var showLiveApp = false
     @State private var showInfo = false
     private let capture = ProcessInfo.processInfo.arguments.contains("--capture")
-    private let violet = Color(red: 0.73, green: 0.55, blue: 1)
+    private var violet: Color { dark ? Color(red: 0.73, green: 0.55, blue: 1) : Color(red: 0.43, green: 0.23, blue: 0.78) }
+    private var accentInk: Color { dark ? .black : .white }
+    private let canvas = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
     private var background: Color { dark ? Color(red: 0.035, green: 0.035, blue: 0.055) : Color(red: 0.96, green: 0.95, blue: 0.98) }
     private var ink: Color { dark ? .white : Color(red: 0.10, green: 0.08, blue: 0.16) }
     private var hero: PreviewTitle { PreviewTitle.samples[heroIndex % PreviewTitle.samples.count] }
@@ -187,9 +189,13 @@ struct GlassDesignPrototype: View {
         ZStack(alignment: .bottomLeading) {
             Image(hero.image).resizable().scaledToFill().frame(height: 566).clipped()
             LinearGradient(stops: [.init(color: .black.opacity(0.36), location: 0), .init(color: .clear, location: 0.4), .init(color: .black.opacity(0.76), location: 0.76), .init(color: dark ? background : .black.opacity(0.88), location: 1)], startPoint: .top, endPoint: .bottom)
+            heroDetails
+        }.frame(height: 566)
+    }
+    private var heroDetails: some View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
-                    Text("\(heroIndex + 1)").font(.caption.bold()).padding(5).background(violet, in: RoundedRectangle(cornerRadius: 5))
+                    Text("\(heroIndex + 1)").font(.caption.bold()).foregroundStyle(accentInk).padding(5).background(violet, in: RoundedRectangle(cornerRadius: 5))
                     Text("YOUR NEXT ADVENTURE").font(.system(size: 9, weight: .bold)).tracking(2)
                 }
                 Text(hero.name).font(.system(size: 48, weight: .heavy, design: .rounded)).tracking(-2).lineLimit(1).minimumScaleFactor(0.65)
@@ -204,7 +210,6 @@ struct GlassDesignPrototype: View {
                     ForEach(0..<PreviewTitle.samples.count, id: \.self) { index in Capsule().fill(index == heroIndex ? .white : .white.opacity(0.3)).frame(width: index == heroIndex ? 22 : 5, height: 4) }
                 }.frame(maxWidth: .infinity).padding(.top, 4)
             }.padding(.horizontal, 24).padding(.bottom, 10).foregroundStyle(.white)
-        }.frame(height: 566)
     }
     private var splitHero: some View {
         HStack(spacing: 0) {
@@ -213,7 +218,7 @@ struct GlassDesignPrototype: View {
                 Text("Solo\nLeveling").font(.system(size: 33, weight: .heavy, design: .rounded)).tracking(-1.3)
                 Text("Arise from the Shadow").font(.caption).foregroundStyle(.secondary)
                 Button { detail = PreviewTitle.samples[1] } label: {
-                    Label("Explore", systemImage: "arrow.up.right").font(.subheadline.bold()).padding(.horizontal, 18).padding(.vertical, 12).background(violet, in: Capsule()).foregroundStyle(.black)
+                    Label("Explore", systemImage: "arrow.up.right").font(.subheadline.bold()).padding(.horizontal, 18).padding(.vertical, 12).background(violet, in: Capsule()).foregroundStyle(accentInk)
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             Image("PreviewSolo").resizable().scaledToFill().frame(width: 150, height: 285).clipped()
@@ -245,7 +250,14 @@ struct GlassDesignPrototype: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach([PreviewTitle.samples[1], PreviewTitle.samples[0]]) { title in
-                        Button { detail = title } label: {
+                        continueCard(title)
+                    }
+                }.padding(.horizontal, 22)
+            }
+        }
+    }
+    private func continueCard(_ title: PreviewTitle) -> some View {
+        Button { detail = title } label: {
                             VStack(alignment: .leading, spacing: 9) {
                                 ZStack(alignment: .bottom) {
                                     Image(title.image).resizable().scaledToFill().frame(width: 242, height: 126).clipped()
@@ -257,31 +269,36 @@ struct GlassDesignPrototype: View {
                                 Text("Episode \(title.id == 1 ? 7 : 12) · 9 min left").font(.caption).foregroundStyle(.secondary)
                             }.frame(width: 242, alignment: .leading)
                         }.buttonStyle(.plain)
-                    }
-                }.padding(.horizontal, 22)
-            }
-        }
     }
     private func posterShelf(_ title: String, ranked: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeading(title).padding(.horizontal, 22)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: ranked ? 18 : 12) {
-                    ForEach(Array(PreviewTitle.samples.enumerated()), id: \.element.id) { index, sample in
-                        Button { detail = sample } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Image(sample.image).resizable().scaledToFill().frame(width: ranked ? 126 : 118, height: ranked ? 178 : 166).clipped().clipShape(RoundedRectangle(cornerRadius: 15))
-                                    .overlay(alignment: .bottomLeading) {
-                                        if ranked { Text("\(index + 1)").font(.system(size: 48, weight: .black, design: .rounded)).foregroundStyle(.white).shadow(color: .black.opacity(0.8), radius: 4).offset(x: -7, y: 7) }
-                                    }
-                                Text(sample.name).font(.caption.weight(.semibold)).lineLimit(1)
-                                Text(sample.genre).font(.system(size: 10)).foregroundStyle(.secondary)
-                            }.frame(width: ranked ? 126 : 118, alignment: .leading)
-                        }.buttonStyle(.plain)
+                    ForEach(PreviewTitle.samples) { sample in
+                        posterCard(sample, ranked: ranked)
                     }
                 }.padding(.horizontal, 22)
             }
         }
+    }
+    private func posterCard(_ sample: PreviewTitle, ranked: Bool) -> some View {
+        Button { detail = sample } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(sample.image).resizable().scaledToFill()
+                    .frame(width: ranked ? 126 : 118, height: ranked ? 178 : 166)
+                    .clipped().clipShape(RoundedRectangle(cornerRadius: 15))
+                    .overlay(alignment: .bottomLeading) {
+                        if ranked {
+                            Text("\(sample.id + 1)").font(.system(size: 48, weight: .black, design: .rounded))
+                                .foregroundStyle(.white).shadow(color: .black.opacity(0.8), radius: 4)
+                                .offset(x: -7, y: 7)
+                        }
+                    }
+                Text(sample.name).font(.caption.weight(.semibold)).lineLimit(1)
+                Text(sample.genre).font(.system(size: 10)).foregroundStyle(.secondary)
+            }.frame(width: ranked ? 126 : 118, alignment: .leading)
+        }.buttonStyle(.plain)
     }
     private func sectionHeading(_ title: String) -> some View {
         HStack { Text(title).font(.system(size: 20, weight: .bold, design: .rounded)).tracking(-0.4); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.secondary) }
@@ -311,7 +328,7 @@ struct GlassDesignPrototype: View {
                     ForEach(["All", "Action", "Fantasy", "Supernatural"], id: \.self) { value in
                         Button { filter = value } label: {
                             Text(value).font(.caption.bold()).padding(.horizontal, 17).frame(height: 38)
-                                .background(filter == value ? violet : violet.opacity(0.08), in: Capsule()).foregroundStyle(filter == value ? .black : ink)
+                                .background(filter == value ? violet : violet.opacity(0.08), in: Capsule()).foregroundStyle(filter == value ? accentInk : ink)
                         }
                     }
                 }.padding(.horizontal, 22)
@@ -387,7 +404,7 @@ struct GlassDesignPrototype: View {
                         HStack { VStack(alignment: .leading, spacing: 5) { Text("\(style.rawValue) · \(style.title)").font(.subheadline.bold()); Text(style.subtitle).font(.caption).foregroundStyle(.secondary) }; Spacer(); if direction == style { Image(systemName: "checkmark.circle.fill").foregroundStyle(violet) } }
                     }.buttonStyle(.plain).padding(.vertical, 8)
                 }
-                Button("Open the real Kairo app") { showLiveApp = true }.buttonStyle(.bordered)
+                Button("Open the real Kairo app") { showLiveApp = true }.buttonStyle(.bordered).disabled(canvas)
                 Text("Sample titles and progress are for comparing layouts. These screens do not start streams or change your library.").font(.caption).foregroundStyle(.secondary)
             }.padding(20).background(violet.opacity(0.06), in: RoundedRectangle(cornerRadius: 26)).padding(.horizontal, 22)
         }
@@ -478,7 +495,7 @@ struct GlassDesignPrototype: View {
                 }
                 Section("Try it") { Text("Tap the floating tabs, search and filter in Discover, open a title, change the source label, and use the sun/moon button to compare light and dark.") }
                 Section("Glass appearance") { Text("Native Liquid Glass uses Xcode 26+ and iOS 26+. Earlier systems use a translucent material fallback with the same floating layout.") }
-                Section { Button("Open real Kairo") { showInfo = false; showLiveApp = true } }
+                Section { Button("Open real Kairo") { showInfo = false; showLiveApp = true }.disabled(canvas) }
             }.navigationTitle("Design playground").toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showInfo = false } } }
         }.preferredColorScheme(dark ? .dark : .light)
     }
