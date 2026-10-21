@@ -90,3 +90,39 @@ extension BackgroundHLSDownloadTests {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("playlist.m3u8").path))
     }
 }
+
+
+extension BackgroundHLSDownloadTests {
+    @MainActor func testSystemBackgroundSessionDownloadsPersistedEpisodeBatch() async throws {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Kairo/Downloads/" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let bytes = Data([0x47, 1, 2, 3])
+        try bytes.write(to: source.appendingPathComponent("segment.ts"))
+        let text = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST\n"
+        let playlist = source.appendingPathComponent("playlist.m3u8")
+        try text.write(to: playlist, atomically: true, encoding: .utf8)
+        let address = try await OfflineHLSServer.shared.playbackURL(for: playlist)
+        let store = AppStore(directory: root.appendingPathComponent("state"))
+        let anime = Anime(title: "Background fixture", cover: nil, banner: nil, episodeCount: 1, genres: [])
+        let record = DownloadRecord(anime: anime, episode: 1, audio: .sub)
+        store.state.downloads = [record]
+        let target = root.appendingPathComponent(record.id.uuidString)
+        let job = try await HLSDownloadTransfer(client: DownloadHTTPClient(wifiOnly: false)).prepareBackground(id: record.id, url: address, headers: [:], folder: target, wifiOnly: false)
+        let engine = BackgroundHLSDownload(store: store, root: root, sessionPrefix: "net.kusapo.kairo.test." + UUID().uuidString + ".")
+        defer { engine.invalidateForTesting() }
+        let restored = expectation(description: "Background sessions restored")
+        engine.restore { restored.fulfill() }
+        await fulfillment(of: [restored], timeout: 10)
+        let completed = expectation(description: "System batch completed")
+        engine.onChange = { if store.state.downloads.first?.state == .ready { completed.fulfill() } }
+        try engine.start(job)
+        await fulfillment(of: [completed], timeout: 60)
+        XCTAssertEqual(store.state.downloads.first?.state, .ready)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("v_seg_0.ts")), bytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.appendingPathComponent("playlist.m3u8").path))
+    }
+}
