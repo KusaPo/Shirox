@@ -43,7 +43,7 @@ struct DownloadsView: View {
         List {
             Section {
                 Label(availableStorage, systemImage: "internaldrive")
-                Text("Keep Kairo open for HLS downloads. Completed segments are kept when paused; server limits retry automatically.").font(.caption).foregroundStyle(.secondary)
+                Text("Once preparation finishes, downloads can continue when you switch apps or lock your iPhone. iOS controls timing; completed segments are saved.").font(.caption).foregroundStyle(.secondary)
             }
             if store.state.downloads.isEmpty { ContentUnavailableView("Take a story with you", systemImage: "arrow.down.circle", description: Text("Open a title and tap the download button beside an episode.")) }
             ForEach(titles) { anime in

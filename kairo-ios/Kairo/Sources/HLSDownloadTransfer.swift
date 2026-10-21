@@ -178,6 +178,69 @@ actor HLSDownloadTransfer {
         try Task.checkCancellation()
         return target
     }
+    func prepareBackground(id: UUID, url: URL, headers: [String: String], folder: URL, wifiOnly: Bool) async throws -> BackgroundHLSJob {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: folder.path)
+        var (text, base) = try await manifest(url, headers: headers, onWait: { _ in })
+        var choice: HLSVariantChoice?
+        var audio: [(HLSAudioRendition, HLSDownloadPlan)] = []
+        if text.contains("#EXT-X-STREAM-INF") {
+            guard let selected = HLSManifestParser.selectBestVariantChoice(text, baseURL: base) else { throw KairoError.message("No downloadable HLS variant was found.") }
+            choice = selected
+            (text, base) = try await manifest(selected.video, headers: headers, onWait: { _ in })
+            for rendition in selected.audioRenditions {
+                let (content, origin) = try await manifest(rendition.url, headers: headers, onWait: { _ in })
+                audio.append((rendition, try plan(content, base: origin)))
+            }
+        }
+        let video = try plan(text, base: base)
+        var resources: [BackgroundHLSResource] = []
+        func collect(_ plan: HLSDownloadPlan, prefix: String) async throws -> String {
+            let original = plan.segments[0].url.pathExtension.lowercased()
+            let ext = plan.isFMP4 ? "m4s" : (["aac", "mp3", "ac3", "ec3"].contains(original) ? original : "ts")
+            var initName: String?
+            if let start = plan.initSegment {
+                initName = prefix + "init.mp4"
+                resources.append(try await backgroundResource(start.url, name: initName!, range: start.byteRange, key: start.key, sequence: 0, headers: headers))
+            }
+            for (index, segment) in plan.segments.enumerated() {
+                try Task.checkCancellation()
+                resources.append(try await backgroundResource(segment.url, name: "\(prefix)seg_\(index).\(ext)", range: segment.byteRange, key: segment.key, sequence: segment.mediaSequence, headers: headers))
+            }
+            return HLSManifestParser.localManifest(durations: plan.segments.map(\.duration), segmentExtension: ext, initFileName: initName, segmentPrefix: prefix + "seg_")
+        }
+        let videoText = try await collect(video, prefix: "v_")
+        var manifests: [String: String] = [:]
+        if let choice, !audio.isEmpty {
+            manifests["video.m3u8"] = videoText
+            var localAudio: [HLSLocalAudio] = []
+            for (index, pair) in audio.enumerated() {
+                let name = "audio_\(index).m3u8"
+                manifests[name] = try await collect(pair.1, prefix: "a\(index)_")
+                localAudio.append(HLSLocalAudio(playlist: name, name: pair.0.name, language: pair.0.language, isDefault: pair.0.isDefault))
+            }
+            manifests["playlist.m3u8"] = HLSManifestParser.localMasterManifest(videoPlaylist: "video.m3u8", audio: localAudio, bandwidth: choice.bandwidth, codecs: choice.codecs)
+        } else { manifests["playlist.m3u8"] = videoText }
+        for index in resources.indices { resources[index].complete = resources[index].exists(in: folder) }
+        return BackgroundHLSJob(id: id, wifiOnly: wifiOnly, headers: headers, resources: resources, manifests: manifests)
+    }
+    private func backgroundResource(_ url: URL, name: String, range: HLSByteRange?, key: HLSKey?, sequence: Int, headers: [String: String]) async throws -> BackgroundHLSResource {
+        let identity = "\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
+        let hash = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        var keyData: Data?, iv: Data?
+        if let key {
+            guard key.method == .aes128, let address = key.url else { throw KairoError.message("Unsupported HLS encryption.") }
+            if let cached = keys[address] { keyData = cached }
+            else {
+                let bytes = try await client.fetch(address, headers: headers).0
+                guard bytes.count == 16 else { throw KairoError.message("Invalid HLS encryption key.") }
+                keys[address] = bytes; keyData = bytes
+            }
+            iv = Data(key.iv ?? HLSManifestParser.defaultIV(forMediaSequence: sequence))
+        }
+        return BackgroundHLSResource(url: url, name: name, range: range, key: keyData, iv: iv, identity: hash)
+    }
     private func manifest(_ url: URL, headers: [String: String], onWait: @escaping @Sendable (TimeInterval) -> Void) async throws -> (String, URL) {
         let (data, final) = try await client.fetch(url, headers: headers, onWait: onWait)
         guard let text = String(data: data, encoding: .utf8), text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else {
