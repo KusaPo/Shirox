@@ -3,6 +3,9 @@ set -euo pipefail
 preview_device=$1
 preview_derived=$2
 preview_output=$3
+# Reuse the simulator xcodebuild already booted rather than starting a second iOS VM.
+preview_booted=$(xcrun simctl list devices booted -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((x["udid"] for items in d["devices"].values() for x in items if "iPhone" in x["name"]), ""))')
+if [ -n "$preview_booted" ]; then preview_device=$preview_booted; fi
 mkdir -p "$preview_output"
 xcrun simctl boot "$preview_device" 2>/dev/null || true
 xcrun simctl bootstatus "$preview_device" -b

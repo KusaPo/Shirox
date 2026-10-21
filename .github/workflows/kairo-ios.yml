@@ -55,8 +55,9 @@ jobs:
           set -o pipefail
           # WebKit bug 293831: Xcode 16.4/iOS 18.5 simulator lacks the pre-18.4 overlay.
           # Override the simulator test build only; the device archive remains iOS 17+.
-          xcodebuild test -project kairo-ios/Kairo.xcodeproj -scheme Kairo -destination "platform=iOS Simulator,id=$KAIRO_TEST_DEVICE" -derivedDataPath /tmp/kairo-derived -resultBundlePath /tmp/KairoTests.xcresult CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=18.4 2>&1 | tee /tmp/kairo-build.log
+          xcodebuild test -parallel-testing-enabled NO -project kairo-ios/Kairo.xcodeproj -scheme Kairo -destination "platform=iOS Simulator,id=$KAIRO_TEST_DEVICE" -derivedDataPath /tmp/kairo-derived -resultBundlePath /tmp/KairoTests.xcresult CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=18.4 2>&1 | tee /tmp/kairo-build.log
       - name: Capture interactive design examples
+        timeout-minutes: 4
         if: startsWith(github.head_ref, 'prototype/')
         run: bash kairo-ios/scripts/capture_designs.sh "$KAIRO_TEST_DEVICE" /tmp/kairo-derived /tmp/kairo-designs
       - name: Upload design screenshots
