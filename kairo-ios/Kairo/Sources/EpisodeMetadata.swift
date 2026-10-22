@@ -139,6 +139,19 @@ struct EpisodeMetadata: Equatable {
         return EpisodeMetadata(number: Int(raw), title: title?.isEmpty == false ? title : nil)
     }
 
+    // Anira identifies each episode explicitly; absolute numbers can span seasons.
+    // Keep the relative episode number belonging to this exact anime mapping.
+    static func mappedEpisode(_ row: [String: Any]) -> EpisodeMetadata? {
+        guard let value = row["episode"] as? NSNumber else { return nil }
+        let raw = value.doubleValue
+        guard raw.isFinite, raw > 0, raw <= 5000, raw.rounded() == raw else { return nil }
+        let text = (row["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generic = text?.range(of: #"^Episode\s+[0-9]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        let image = EpisodeImageResource.parse(row["thumbnail"])
+        return EpisodeMetadata(number: Int(raw), title: text?.isEmpty == false && !generic ? text : nil,
+                               thumbnail: image?.url, thumbnailHeaders: image?.headers ?? [:])
+    }
+
     static func merge(_ items: [EpisodeMetadata]) -> [Int: EpisodeMetadata] {
         var result: [Int: EpisodeMetadata] = [:]
         for item in items {
@@ -160,12 +173,13 @@ struct EpisodeMetadataPage {
 actor EpisodeMetadataAPI {
     static let shared = EpisodeMetadataAPI()
     private let session: URLSession
+    private var mappedCache: [String: (Date, [EpisodeMetadata])] = [:]
     private var mediaCache: [Int: (Date, Int?, [EpisodeMetadata])] = [:]
     private var pageCache: [String: (Date, EpisodeMetadataPage)] = [:]
     private var nextJikanRequest = Date.distantPast
 
-    init() {
-        let config = URLSessionConfiguration.ephemeral
+    init(configuration: URLSessionConfiguration = .ephemeral) {
+        let config = configuration
         config.timeoutIntervalForRequest = 12
         config.timeoutIntervalForResource = 18
         session = URLSession(configuration: config)
@@ -173,24 +187,33 @@ actor EpisodeMetadataAPI {
 
     func episodes(for anime: Anime, page: Int) async throws -> EpisodeMetadataPage {
         let key = "\(anime.id)|\(anime.malID ?? 0)|\(page)"
-        if let cached = pageCache[key], Date().timeIntervalSince(cached.0) < 3600 { return cached.1 }
+        if let cached = pageCache[key], Date().timeIntervalSince(cached.0) < 900 { return cached.1 }
         var items: [EpisodeMetadata] = []
         var malID = anime.malID
         var unavailable = false
-        if let id = anime.anilistID {
+        // Use verified external IDs directly. AniList outages must not prevent
+        // access to independent episode titles and artwork.
+        if let id = anime.anilistID ?? anime.malID, id > 0 {
+            let mapping = anime.anilistID != nil ? "anilist" : "myanimelist"
+            do {
+                items = try await mappedEpisodes(id: id, mapping: mapping)
+            } catch is CancellationError { throw CancellationError() }
+            catch { unavailable = true }
+        }
+        if items.isEmpty, let id = anime.anilistID {
             do {
                 let media = try await media(id)
                 malID = malID ?? media.0
-                items = media.1
+                items += media.1
             } catch is CancellationError { throw CancellationError() }
             catch { unavailable = true }
-        } else if malID == nil {
+        } else if items.isEmpty && malID == nil {
             // Source catalogues sometimes omit both external IDs. Only accept an
             // exact matching AniList title to avoid using another show's episodes.
             do {
                 let media = try await matchingMedia(anime)
                 malID = media.0
-                items = media.1
+                items += media.1
             } catch is CancellationError { throw CancellationError() }
             catch { unavailable = true }
         }
@@ -202,7 +225,11 @@ actor EpisodeMetadataAPI {
             } catch is CancellationError { throw CancellationError() }
             catch { unavailable = true }
         }
-        if let malID, malID > 0 {
+        let lower = (max(1, page) - 1) * 100 + 1
+        let expected = min(100, max(0, (anime.episodeCount ?? 0) - lower + 1))
+        let mapped = EpisodeMetadata.merge(items.filter { (lower..<(lower + 100)).contains($0.number) })
+        let needsTitles = expected == 0 || (lower..<(lower + expected)).contains { mapped[$0]?.title == nil }
+        if let malID, malID > 0, needsTitles {
             do {
                 // Jikan serves 100-episode screen ranges in smaller API pages.
                 // Stop at its last page rather than requesting empty pages.
@@ -223,17 +250,41 @@ actor EpisodeMetadataAPI {
             catch { unavailable = true }
         }
         try Task.checkCancellation()
-        let lower = (max(1, page) - 1) * 100 + 1
         let records = EpisodeMetadata.merge(items.filter { (lower..<(lower + 100)).contains($0.number) })
-        let notice: String? = unavailable
+        let hasDetails = records.values.contains { $0.title != nil || $0.thumbnail != nil }
+        let notice: String? = unavailable && !hasDetails
             ? "Some episode details could not be loaded. You can still choose an episode."
             : nil
         let result = EpisodeMetadataPage(episodes: records, notice: notice)
-        if !unavailable {
+        if !unavailable && hasDetails {
             if pageCache.count >= 100 { pageCache.removeAll() }
             pageCache[key] = (Date(), result)
         }
         return result
+    }
+
+    private func mappedEpisodes(id: Int, mapping: String) async throws -> [EpisodeMetadata] {
+        let key = "\(mapping):\(id)"
+        if let cached = mappedCache[key], Date().timeIntervalSince(cached.0) < 900 { return cached.1 }
+        let url = URL(string: "https://api.anira.dev/media/\(id)/episodes?mapping_key=\(mapping)")!
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Kairo/1.0", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        // A missing mapping is expected for some anime; other providers still run.
+        if response.statusCode == 404 { return [] }
+        guard (200..<300).contains(response.statusCode),
+              let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw KairoError.message("Episode artwork is temporarily unavailable.")
+        }
+        let episodes = rows.compactMap(EpisodeMetadata.mappedEpisode)
+        if !episodes.isEmpty {
+            if mappedCache.count >= 100 { mappedCache.removeAll() }
+            mappedCache[key] = (Date(), episodes)
+        }
+        return episodes
     }
 
     private func media(_ id: Int) async throws -> (Int?, [EpisodeMetadata]) {
