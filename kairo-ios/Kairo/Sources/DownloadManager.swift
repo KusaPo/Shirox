@@ -39,6 +39,11 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     private var tasks: [UUID: URLSessionTask] = [:]
     private var preparing: [UUID: Task<Void, Never>] = [:]
     private var transferErrors: [UUID: String] = [:]
+    private lazy var backgroundHLS: BackgroundHLSDownload = {
+        let engine = BackgroundHLSDownload(store: store, root: Self.segmentFolder(UUID()).deletingLastPathComponent())
+        engine.onChange = { [weak self] in self?.pump() }
+        return engine
+    }()
     private var restoring = true
     private var foregroundObserver: AnyCancellable?
     static let prefix = "net.kusapo.kairo.download."
@@ -49,6 +54,15 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
 
     static func registerCompletion(_ identifier: String, handler: @escaping () -> Void) {
         backgroundCompletions[identifier] = handler
+        finishIfReady(identifier)
+    }
+    static func beginBackgroundValidation(_ identifier: String) { validations[identifier, default: 0] += 1 }
+    static func endBackgroundValidation(_ identifier: String) {
+        validations[identifier, default: 0] -= 1
+        finishIfReady(identifier)
+    }
+    static func finishedBackgroundEvents(_ identifier: String) {
+        finishedSessions.insert(identifier)
         finishIfReady(identifier)
     }
     private static func finishIfReady(_ identifier: String) {
@@ -63,7 +77,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
         super.init()
         foregroundObserver = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in self?.pump() }
-        restore()
+        backgroundHLS.restore { [weak self] in self?.restore() }
     }
 
     private func restore() {
@@ -81,7 +95,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
                     }
                     remaining -= 1
                     guard remaining == 0 else { return }
-                    for id in oldIDs where self.tasks[id] == nil {
+                    for id in oldIDs where self.tasks[id] == nil && !self.backgroundHLS.contains(id) {
                         self.store.updateDownload(id) { item in
                             if item.state == .resolving || item.state == .downloading {
                                 item.state = .interrupted
@@ -138,9 +152,11 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
 
     private func pump() {
         guard !restoring, UIApplication.shared.applicationState != .background else { return }
-        while tasks.values.filter({ $0.state == .running }).count + preparing.count < 2 {
+        while tasks.values.filter({ $0.state == .running }).count + preparing.count + backgroundHLS.activeIDs.count < 2 {
             guard let item = store.state.downloads.first(where: { $0.state == .queued && preparing[$0.id] == nil }) else { return }
-            if let task = tasks[item.id] {
+            if backgroundHLS.contains(item.id) {
+                backgroundHLS.resume(item.id)
+            } else if let task = tasks[item.id] {
                 store.updateDownload(item.id) { $0.state = .downloading; $0.message = nil }
                 task.resume()
             } else {
@@ -192,46 +208,20 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
     @MainActor private func downloadHLS(_ item: DownloadRecord, stream: StreamOption, wifiOnly: Bool) async throws {
         let folder = Self.segmentFolder(item.id)
         var backgroundID = UIBackgroundTaskIdentifier.invalid
-        backgroundID = UIApplication.shared.beginBackgroundTask(withName: "Finish episode segment") { [weak self] in
-            guard let self else { return }
-            self.preparing[item.id]?.cancel()
-            self.store.updateDownload(item.id) {
-                $0.state = .paused
-                $0.message = "iOS paused this transfer. Open Kairo and tap resume; completed segments are saved."
+        backgroundID = UIApplication.shared.beginBackgroundTask(withName: "Prepare background episode") { [weak self] in
+            self?.preparing[item.id]?.cancel()
+            self?.store.updateDownload(item.id) {
+                $0.state = .paused; $0.message = "Open Kairo to finish preparing this episode for background download."
             }
-            if backgroundID != .invalid {
-                UIApplication.shared.endBackgroundTask(backgroundID)
-                backgroundID = .invalid
-            }
+            if backgroundID != .invalid { UIApplication.shared.endBackgroundTask(backgroundID); backgroundID = .invalid }
         }
         defer { if backgroundID != .invalid { UIApplication.shared.endBackgroundTask(backgroundID) } }
-        store.updateDownload(item.id) { $0.state = .downloading; $0.message = nil }
+        store.updateDownload(item.id) { $0.message = "Preparing background download…" }
         let transfer = HLSDownloadTransfer(client: DownloadHTTPClient(wifiOnly: wifiOnly))
-        let local = try await transfer.download(url: stream.url, headers: stream.headers, folder: folder,
-            onProgress: { [weak self] fraction in
-                Task { @MainActor in
-                    self?.store.updateDownload(item.id) {
-                        guard $0.state == .downloading else { return }
-                        $0.fraction = min(0.99, fraction); $0.message = nil
-                    }
-                }
-            }, onWait: { [weak self] seconds in
-                Task { @MainActor in
-                    self?.store.updateDownload(item.id) {
-                        guard $0.state == .downloading else { return }
-                        $0.message = "The server is busy. Retrying in at least \(Int(seconds.rounded(.up))) seconds; completed segments are saved."
-                    }
-                }
-            })
+        let job = try await transfer.prepareBackground(id: item.id, url: stream.url, headers: stream.headers, folder: folder, wifiOnly: wifiOnly)
         try Task.checkCancellation()
-        let playback = try await OfflineHLSServer.shared.playbackURL(for: local)
-        guard try await AVURLAsset(url: playback).load(.isPlayable) else {
-            throw KairoError.message("The saved episode could not be opened. Try another provider.")
-        }
-        try Task.checkCancellation()
-        guard let relative = LocalDownloadStorage.relativePath(for: local),
-              store.state.downloads.contains(where: { $0.id == item.id }) else { return }
-        store.updateDownload(item.id) { $0.relativePath = relative; $0.fraction = 1; $0.state = .ready; $0.message = nil }
+        guard store.state.downloads.contains(where: { $0.id == item.id }) else { return }
+        try backgroundHLS.start(job)
     }
 
     private static func segmentFolder(_ id: UUID) -> URL {
@@ -254,17 +244,26 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
 
     func pause(_ id: UUID) {
         preparing[id]?.cancel()
+        backgroundHLS.pause(id)
         tasks[id]?.suspend()
         store.updateDownload(id) { $0.state = .paused }
         pump()
     }
     func resume(_ id: UUID) {
         guard preparing[id] == nil else { return }
+        if backgroundHLS.contains(id) {
+            // Re-resolve expired signed links after an interruption; a manual pause
+            // can resume its persisted job without starting over.
+            if store.state.downloads.first(where: { $0.id == id })?.state != .paused {
+                backgroundHLS.remove(id)
+            }
+        }
         store.updateDownload(id) { $0.state = .queued; $0.message = nil }
         pump()
     }
     func remove(_ id: UUID) {
         preparing[id]?.cancel()
+        backgroundHLS.remove(id)
         tasks.removeValue(forKey: id)?.cancel()
         if let url = store.state.downloads.first(where: { $0.id == id })?.localURL {
             do { if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) } }

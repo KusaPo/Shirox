@@ -16,7 +16,7 @@ jobs:
       - name: Archive and validate iPhone IPA
         run: |
           set -o pipefail
-          bash kairo-ios/scripts/build_ipa.sh "$RUNNER_TEMP/kairo-ipa" 2>&1 | tee "$RUNNER_TEMP/kairo-ipa-build.log"
+          bash kairo-ios/scripts/build_ipa.sh "$RUNNER_TEMP/kairo-ipa" "Release" 2>&1 | tee "$RUNNER_TEMP/kairo-ipa-build.log"
       - name: Upload IPA for AltStore
         uses: actions/upload-artifact@v4
         with:
@@ -49,11 +49,24 @@ jobs:
           device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if "iOS" in runtime for x in items if x.get("isAvailable") and "iPhone" in x["name"]))')
           echo "KAIRO_TEST_DEVICE=$device_id" >> "$GITHUB_ENV"
       - name: Build and run unit tests
+        timeout-minutes: 12
         run: |
           set -o pipefail
           # WebKit bug 293831: Xcode 16.4/iOS 18.5 simulator lacks the pre-18.4 overlay.
           # Override the simulator test build only; the device archive remains iOS 17+.
-          xcodebuild test -project kairo-ios/Kairo.xcodeproj -scheme Kairo -destination "platform=iOS Simulator,id=$KAIRO_TEST_DEVICE" -derivedDataPath /tmp/kairo-derived -resultBundlePath /tmp/KairoTests.xcresult CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=18.4 2>&1 | tee /tmp/kairo-build.log
+          xcodebuild test -parallel-testing-enabled NO -project kairo-ios/Kairo.xcodeproj -scheme Kairo -destination "platform=iOS Simulator,id=$KAIRO_TEST_DEVICE" -derivedDataPath /tmp/kairo-derived -resultBundlePath /tmp/KairoTests.xcresult CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=18.4 2>&1 | tee /tmp/kairo-build.log
+      - name: Capture interactive design examples
+        timeout-minutes: 6
+        if: startsWith(github.head_ref, 'prototype/')
+        run: bash kairo-ios/scripts/capture_designs.sh "$KAIRO_TEST_DEVICE" /tmp/kairo-derived /tmp/kairo-designs
+      - name: Upload design screenshots
+        if: always() && startsWith(github.head_ref, 'prototype/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kairo-Design-Previews
+          path: /tmp/kairo-designs
+          if-no-files-found: error
+          retention-days: 30
       - name: Probe public source contracts
         if: always()
         continue-on-error: true

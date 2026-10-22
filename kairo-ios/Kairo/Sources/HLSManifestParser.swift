@@ -7,7 +7,7 @@ import CommonCrypto
 
 // MARK: - Parsed model
 
-struct HLSByteRange: Equatable {
+struct HLSByteRange: Equatable, Codable {
     let length: Int
     let offset: Int
 }

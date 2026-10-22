@@ -3,6 +3,8 @@
 set -euo pipefail
 kairo_root=$(cd "$(dirname "$0")/.." && pwd)
 kairo_output=${1:-"$kairo_root/build/ipa"}
+kairo_configuration=${2:-Release}
+case "$kairo_configuration" in Debug|Release) ;; *) echo "Expected Debug or Release" >&2; exit 2 ;; esac
 mkdir -p "$kairo_output"
 kairo_output=$(cd "$kairo_output" && pwd)
 kairo_temp=$(mktemp -d "${TMPDIR:-/tmp}/kairo-ipa.XXXXXX")
@@ -10,7 +12,7 @@ trap 'rm -rf "$kairo_temp"' EXIT
 
 xcodebuild archive \
   -project "$kairo_root/Kairo.xcodeproj" -scheme Kairo \
-  -configuration Release -destination 'generic/platform=iOS' \
+  -configuration "$kairo_configuration" -destination 'generic/platform=iOS' \
   -archivePath "$kairo_temp/Kairo.xcarchive" \
   -derivedDataPath "$kairo_temp/DerivedData" \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO

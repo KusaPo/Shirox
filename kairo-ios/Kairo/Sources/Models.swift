@@ -83,6 +83,11 @@ struct DownloadRecord: Codable, Identifiable {
     var relativePath: String?
     var message: String?
     var created = Date()
+    var downloadFraction: Double {
+        if state == .ready { return 1 }
+        return fraction.isFinite ? min(0.99, max(0, fraction)) : 0
+    }
+    var percentage: String { "\(Int((downloadFraction * 100).rounded(.down)))%" }
     var localURL: URL? {
         guard let relativePath else { return nil }
         return LocalDownloadStorage.url(forRelativePath: relativePath)

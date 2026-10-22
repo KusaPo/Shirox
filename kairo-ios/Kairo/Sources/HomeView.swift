@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct HomeView: View {
+    @AppStorage("appDesign") private var design: AppDesign = .cinema
+    @AppStorage("discoverySource") private var discoverySource = DiscoverySource.animex.rawValue
+    @ObservedObject private var registry = ModuleRegistry.shared
     @Binding var selectedTab: KairoTab
     @EnvironmentObject private var store: AppStore
     @State private var busy = false
@@ -11,6 +14,16 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                if design != .cinema {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if design == .editorial {
+                            Text("CURATED FOR YOU").font(.caption2.bold()).tracking(2.5).foregroundStyle(Theme.purple)
+                        }
+                        Text(design == .split ? "A little escape." : "Stories worth\nstaying up for.")
+                            .font(.system(size: design == .split ? 32 : 39, weight: .bold, design: design == .split ? .rounded : .serif))
+                        if design == .split { Text("Find your next favourite.").foregroundStyle(.secondary) }
+                    }.padding(.horizontal, 22).padding(.top, 12)
+                }
                 if !store.state.trending.isEmpty {
                     TrendingCarousel(items: store.state.trending)
                     if let error {
@@ -48,8 +61,32 @@ struct HomeView: View {
             }.padding(.bottom, 24)
         }
         .background(Theme.background)
-        .navigationTitle("kairo").navigationBarTitleDisplayMode(.inline)
-        .toolbar { SourceToolbar() }
+        .ignoresSafeArea(edges: design == .cinema ? .top : [])
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Menu {
+                    Picker("Browse source", selection: $discoverySource) {
+                        ForEach(DiscoverySource.allCases) { Text($0.name).tag($0.rawValue) }
+                        ForEach(registry.modules) { Text($0.name).tag($0.id) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("kairo").font(.system(size: 22, weight: .heavy, design: .rounded))
+                        Text(registry.modules.first(where: { $0.id == discoverySource })?.name ?? DiscoverySource(rawValue: discoverySource)?.name ?? "Source")
+                            .font(.caption.weight(.medium)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }.padding(.horizontal, 12).padding(.vertical, 9).kairoGlass(in: Capsule())
+                }.foregroundStyle(.primary).accessibilityLabel("Change browse source")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { selectedTab = .settings } label: {
+                    Image(systemName: "person.crop.circle").font(.title3)
+                        .frame(width: 42, height: 42).kairoGlass(in: Circle())
+                }.accessibilityLabel("Settings")
+            }
+        }
         .navigationDestination(item: $detailTarget) { anime in
             AnimeDetailView(anime: anime, initialEpisode: detailEpisode)
         }
@@ -152,54 +189,26 @@ struct PosterShelf: View {
 }
 
 struct TrendingCarousel: View {
+    @AppStorage("appDesign") private var design: AppDesign = .cinema
+    private var heroHeight: CGFloat { design == .cinema ? 566 : design == .split ? 285 : 240 }
     let items: [Anime]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.kairoTabActive) private var tabActive
     @EnvironmentObject private var store: AppStore
     @State private var index = 0
     @State private var paused = false
     @State private var visible = true
-    private var rotate: Bool { !paused && !reduceMotion && !voiceOver && visible && scenePhase == .active && items.count > 1 }
+    private var rotate: Bool { !paused && !reduceMotion && !voiceOver && visible && tabActive && scenePhase == .active && items.count > 1 }
     var body: some View {
         VStack(spacing: 8) {
             TabView(selection: $index) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { rank, anime in
-                    ZStack(alignment: .bottom) {
-                        AnimeArtwork(anime: anime).frame(maxWidth: .infinity).frame(height: 460)
-                        LinearGradient(stops: [
-                            .init(color: .clear, location: 0.14),
-                            .init(color: .black.opacity(0.55), location: 0.52),
-                            .init(color: .black.opacity(0.92), location: 1)
-                        ], startPoint: .top, endPoint: .bottom).allowsHitTesting(false)
-                        VStack(spacing: 13) {
-                            Text("NEXT ADVENTURE · \(rank + 1) / \(items.count)")
-                                .font(.caption2.weight(.heavy)).tracking(1.7)
-                                .foregroundStyle(.white.opacity(0.85))
-                            Text(anime.title).font(.system(size: 30, weight: .bold, design: .rounded))
-                                .lineLimit(3).minimumScaleFactor(0.75).multilineTextAlignment(.center)
-                                .foregroundStyle(.white)
-                            HStack(spacing: 6) {
-                                ForEach(anime.genres.prefix(3), id: \.self) { genre in
-                                    Text(genre).font(.caption2.weight(.semibold)).padding(.horizontal, 9).padding(.vertical, 5)
-                                        .background(.white.opacity(0.16), in: Capsule())
-                                }
-                            }.foregroundStyle(.white)
-                            HStack(spacing: 10) {
-                                NavigationLink { AnimeDetailView(anime: anime) } label: {
-                                    Label("Watch", systemImage: "play.fill")
-                                        .font(.subheadline.bold()).frame(maxWidth: .infinity).frame(height: 44)
-                                }.buttonStyle(.borderedProminent)
-                                Button { store.toggleSaved(anime) } label: {
-                                    Image(systemName: store.state.library.contains(where: { $0.id == anime.id }) ? "checkmark" : "plus")
-                                        .font(.headline).frame(width: 44, height: 44)
-                                }.buttonStyle(.bordered).tint(.white)
-                                    .accessibilityLabel("Toggle saved title")
-                            }.frame(maxWidth: 300)
-                        }.padding(.horizontal, 24).padding(.bottom, 28)
-                    }.frame(height: 460).tag(rank)
+                    feature(anime, rank: rank).tag(rank)
+
                 }
-            }.tabViewStyle(.page(indexDisplayMode: .never)).frame(height: 460)
+            }.tabViewStyle(.page(indexDisplayMode: .never)).frame(height: heroHeight)
             HStack(spacing: 5) {
                 ForEach(items.indices, id: \.self) { number in
                     Capsule().fill(number == index ? Theme.purple : Color.secondary.opacity(0.32))
@@ -220,6 +229,50 @@ struct TrendingCarousel: View {
                 do { try await Task.sleep(for: .seconds(6)) } catch { return }
                 if !Task.isCancelled { withAnimation(.easeInOut(duration: 0.35)) { index = (index + 1) % items.count } }
             }
+        }
+    }
+
+    @ViewBuilder private func feature(_ anime: Anime, rank: Int) -> some View {
+        if design == .split {
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("IN THE SPOTLIGHT").font(.system(size: 9, weight: .heavy)).tracking(1.7).foregroundStyle(Theme.purple)
+                    Text(anime.title).font(.system(size: 27, weight: .heavy, design: .rounded)).lineLimit(4).minimumScaleFactor(0.7)
+                    Text(anime.genres.prefix(2).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    NavigationLink { AnimeDetailView(anime: anime) } label: {
+                        Label("Explore", systemImage: "arrow.up.right").font(.subheadline.bold())
+                            .padding(12).background(Theme.purple, in: Capsule()).foregroundStyle(.white)
+                    }
+                }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                PosterArtwork(url: anime.cover).frame(width: 145, height: heroHeight)
+                    .mask(LinearGradient(colors: [.clear, .black, .black], startPoint: .leading, endPoint: .trailing))
+            }.frame(height: heroHeight).background(Theme.purple.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 28)).padding(.horizontal, 20)
+        } else {
+            ZStack(alignment: .bottomLeading) {
+                AnimeArtwork(anime: anime).frame(height: heroHeight)
+                LinearGradient(stops: [.init(color: .black.opacity(0.25), location: 0), .init(color: .clear, location: 0.35), .init(color: .black.opacity(0.9), location: 1)], startPoint: .top, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 13) {
+                    Text("\(rank + 1)  YOUR NEXT ADVENTURE").font(.system(size: 9, weight: .heavy)).tracking(2)
+                    Text(anime.title).font(.system(size: design == .cinema ? 42 : 27, weight: .heavy, design: .rounded))
+                        .lineLimit(design == .cinema ? 3 : 2).minimumScaleFactor(0.7)
+                    if design == .cinema {
+                        Text(anime.genres.prefix(3).joined(separator: " · ")).font(.caption).foregroundStyle(.white.opacity(0.8))
+                    }
+                    HStack(spacing: 10) {
+                        NavigationLink { AnimeDetailView(anime: anime) } label: {
+                            Label("Watch now", systemImage: "play.fill").font(.subheadline.bold())
+                                .frame(maxWidth: .infinity).frame(height: 46).background(.white, in: Capsule()).foregroundStyle(.black)
+                        }.buttonStyle(.plain)
+                        Button { store.toggleSaved(anime) } label: {
+                            Image(systemName: store.state.library.contains(where: { $0.id == anime.id }) ? "checkmark" : "plus")
+                                .frame(width: 46, height: 46).kairoGlass(in: Circle())
+                        }.buttonStyle(.plain).accessibilityLabel("Toggle saved title")
+                    }
+                }.padding(24).foregroundStyle(.white)
+            }.frame(height: heroHeight).clipped()
+                .clipShape(RoundedRectangle(cornerRadius: design == .cinema ? 0 : 24))
+                .padding(.horizontal, design == .cinema ? 0 : 20)
         }
     }
 }
