@@ -10,8 +10,21 @@ private final class CatalogDiscoveryProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        Self.lock.lock(); Self.captured.append(request); let deny = Self.deny; Self.lock.unlock()
-        let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+        var capturedRequest = request
+        if capturedRequest.httpBody == nil, let stream = request.httpBodyStream {
+            stream.open()
+            var bytes = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = stream.read(&buffer, maxLength: 4096)
+                if count <= 0 { break }
+                bytes.append(contentsOf: buffer.prefix(count))
+            }
+            stream.close()
+            capturedRequest.httpBody = bytes
+        }
+        Self.lock.lock(); Self.captured.append(capturedRequest); let deny = Self.deny; Self.lock.unlock()
+        let body = capturedRequest.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
         let variables = body["variables"] as? [String: Any] ?? [:]
         let query = variables["query"] as? String
         let wrongHost = request.url?.host != "graphql.animex.one"
