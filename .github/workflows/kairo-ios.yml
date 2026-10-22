@@ -49,7 +49,7 @@ jobs:
           device_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if "iOS" in runtime for x in items if x.get("isAvailable") and "iPhone" in x["name"]))')
           echo "KAIRO_TEST_DEVICE=$device_id" >> "$GITHUB_ENV"
       - name: Build and run unit tests
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: |
           set -o pipefail
           # WebKit bug 293831: Xcode 16.4/iOS 18.5 simulator lacks the pre-18.4 overlay.

@@ -195,11 +195,12 @@ struct TrendingCarousel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.kairoTabActive) private var tabActive
     @EnvironmentObject private var store: AppStore
     @State private var index = 0
     @State private var paused = false
     @State private var visible = true
-    private var rotate: Bool { !paused && !reduceMotion && !voiceOver && visible && scenePhase == .active && items.count > 1 }
+    private var rotate: Bool { !paused && !reduceMotion && !voiceOver && visible && tabActive && scenePhase == .active && items.count > 1 }
     var body: some View {
         VStack(spacing: 8) {
             TabView(selection: $index) {
