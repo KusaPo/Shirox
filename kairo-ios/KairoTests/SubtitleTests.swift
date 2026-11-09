@@ -83,6 +83,9 @@ final class SubtitleTests: XCTestCase {
         view.view.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
         NativePlayer.configure(view, player: player, nativeControls: false, fill: false, subtitleText: "Caption preview")
         view.view.layoutIfNeeded()
+        // AVKit lays out its content overlay during the first pass. Measure only
+        // after captions have been laid out against those final overlay bounds.
+        view.viewDidLayoutSubviews()
         let label = try XCTUnwrap(view.contentOverlayView?.subviews.compactMap { $0 as? UILabel }.first)
         let originalSize = label.font.pointSize
         NativePlayer.configure(view, player: player, nativeControls: false, fill: false, subtitleText: "Caption preview", subtitleBackground: false, subtitleScale: 1.5)
