@@ -223,6 +223,9 @@ actor HLSDownloadTransfer {
             }
             manifests["playlist.m3u8"] = HLSManifestParser.localMasterManifest(videoPlaylist: "video.m3u8", audio: localAudio, bandwidth: choice.bandwidth, codecs: choice.codecs)
         } else { manifests["playlist.m3u8"] = videoText }
+        if let media = reanimeMedia, let captions = await SubtitleService.shared.archive(media.subtitles) {
+            manifests[SubtitleService.archiveName] = captions
+        }
         for index in resources.indices {
             resources[index].complete = resources[index].exists(in: folder)
             if resources[index].complete {

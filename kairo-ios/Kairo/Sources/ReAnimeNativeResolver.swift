@@ -7,6 +7,7 @@ import CommonCrypto
 struct ReAnimeMedia: Equatable {
     let url: URL
     let playlistKey: Data?
+    var subtitles: [SubtitleTrack] = []
     static let headers = ["User-Agent": "Mozilla/5.0", "Referer": "https://flixcloud.cc/", "Origin": "https://flixcloud.cc"]
     static func permits(_ url: URL) -> Bool {
         guard url.scheme == "https", url.user == nil, url.password == nil,
@@ -100,13 +101,24 @@ actor ReAnimeNativeResolver {
             throw KairoError.message("ReAnime returned an unsupported media host.")
         }
         let playlistKey = (result["playlistKey"] as? String).flatMap { Data(base64Encoded: $0) }
-        let media = ReAnimeMedia(url: url, playlistKey: playlistKey)
+        let media = ReAnimeMedia(url: url, playlistKey: playlistKey, subtitles: (root["subtitles"] as? [[String: Any]] ?? []).compactMap(SubtitleTrack.parse))
         let (manifest, _) = try await fetch(url, limit: 2_000_000)
         _ = try media.playlist(manifest)
         if cache.count >= 50 { cache.removeAll() }
         cache[embed] = (Date(), media)
         return media
     }
+    func subtitleTracks(_ embed: URL) async throws -> [SubtitleTrack] {
+        if let cached = cache[embed] { return cached.1.subtitles }
+        guard embed.host == "flixcloud.cc", embed.path.hasPrefix("/e/") else { throw URLError(.badURL) }
+        let (bytes, _) = try await fetch(embed, limit: 2_000_000)
+        let literal = try Self.pageLiteral(String(decoding: bytes, as: UTF8.self))
+        let parsed = try await ModuleRunner.execute(script: ReAnimeJavaScript.json5 + "\nfunction extractDetails(input) { return JSON5.parse(input); }",
+            function: "extractDetails", argument: Self.normalize(literal), timeout: 15)
+        let root = try JSONSerialization.jsonObject(with: Data(parsed.utf8)) as? [String: Any] ?? [:]
+        return (root["subtitles"] as? [[String: Any]] ?? []).compactMap(SubtitleTrack.parse)
+    }
+
     private func fetch(_ url: URL, limit: Int) async throws -> (Data, URL) {
         guard ReAnimeMedia.permits(url) else { throw KairoError.message("Unsupported ReAnime media host.") }
         var request = URLRequest(url: url); request.allHTTPHeaderFields = ReAnimeMedia.headers

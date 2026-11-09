@@ -54,11 +54,32 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var active: PlaybackRequest?
     @Published var audioNotice: String?
     @Published private(set) var isSwitchingAudio = false
+    @Published private(set) var subtitleChoices: [SubtitleChoice] = []
+    @Published private(set) var subtitleSelection: String?
+    @Published private(set) var subtitleText = ""
+    @Published private(set) var subtitlesLoading = false
+    @Published private(set) var subtitleStatus: String?
+    @Published var subtitleNotice: String?
+    private var subtitleDiscoveryTask: Task<Void, Never>?
+    private var subtitleLoadTask: Task<Void, Never>?
+    private var subtitleTimeToken: Any?
+    private var subtitleGroup: AVMediaSelectionGroup?
+    private var nativeSubtitleOptions: [String: AVMediaSelectionOption] = [:]
+    private var externalSubtitleTracks: [String: SubtitleTrack] = [:]
+    private var subtitleDocuments: [String: SubtitleDocument] = [:]
+    private var subtitleCues: [SubtitleCue] = []
+    var burnedInSubtitles: Bool {
+        guard let active else { return false }
+        if let stream = active.stream { return stream.burnedInSubtitles }
+        guard active.anime.moduleID == ReAnimeAPI.moduleID, let audio = active.audio else { return false }
+        return store?.readyDownload(active.anime, episode: active.episode, audio: audio)?.provider?.lowercased().hasPrefix("hsub") == true
+    }
     private var lastProgressSave = Date.distantPast
     private weak var store: AppStore?
 
     @MainActor func open(_ request: PlaybackRequest, store: AppStore, resumeAt: Double? = nil) async {
         saveProgress()
+        resetSubtitles()
         isPreparing = true
         error = nil
         skipPrompt = nil
@@ -89,11 +110,6 @@ final class PlaybackController: ObservableObject {
                let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: audio.languageCode)).first {
                 item.select(option, in: group)
             }
-            if request.audio == .sub,
-               let group = try? await asset.loadMediaSelectionGroup(for: .legible),
-               let option = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "en")).first {
-                item.select(option, in: group)
-            }
             try Task.checkCancellation()
             observation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
                 if item.status == .failed {
@@ -101,6 +117,9 @@ final class PlaybackController: ObservableObject {
                 }
             }
             player.replaceCurrentItem(with: item)
+            subtitleDiscoveryTask = Task { @MainActor [weak self] in await self?.configureSubtitles(request, item: item) }
+            subtitleTimeToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] _ in self?.updateSubtitleText() }
+
             if let resumeAt, resumeAt.isFinite, resumeAt > 0 {
                 await player.seek(to: CMTime(seconds: resumeAt, preferredTimescale: 600))
             } else if let progress = store.progress(request.anime, episode: request.episode), !progress.finished {
@@ -123,6 +142,87 @@ final class PlaybackController: ObservableObject {
             }
         } catch is CancellationError { }
         catch { self.error = error.localizedDescription; isPreparing = false }
+    }
+
+    private func resetSubtitles() {
+        subtitleDiscoveryTask?.cancel(); subtitleDiscoveryTask = nil
+        subtitleLoadTask?.cancel(); subtitleLoadTask = nil
+        if let subtitleTimeToken { player.removeTimeObserver(subtitleTimeToken); self.subtitleTimeToken = nil }
+        subtitleChoices = []; subtitleSelection = nil; subtitleText = ""; subtitleCues = []
+        subtitleGroup = nil; nativeSubtitleOptions = [:]; externalSubtitleTracks = [:]; subtitleDocuments = [:]
+        subtitleStatus = nil; subtitleNotice = nil; subtitlesLoading = false
+    }
+    @MainActor private func configureSubtitles(_ request: PlaybackRequest, item: AVPlayerItem) async {
+        subtitlesLoading = true
+        let group = try? await item.asset.loadMediaSelectionGroup(for: .legible)
+        guard !Task.isCancelled, active?.id == request.id, player.currentItem === item else { return }
+        subtitleGroup = group
+        if let group {
+            for (index, option) in group.options.enumerated() { nativeSubtitleOptions["native-\(index)"] = option }
+            item.select(nil, in: group)
+        }
+        var tracks = request.stream?.reanimeMedia?.subtitles ?? []
+        if let local = request.localURL {
+            let saved = SubtitleService.saved(at: local)
+            for document in saved { subtitleDocuments[document.track.id] = document }
+            tracks = saved.map(\.track)
+            if tracks.isEmpty, request.anime.moduleID == ReAnimeAPI.moduleID, !burnedInSubtitles {
+                do { tracks = try await ReAnimeAPI.shared.subtitleTracks(request.anime, episode: request.episode) }
+                catch { subtitleStatus = "Captions were not saved with this download. Connect to load them once." }
+            }
+        }
+        guard !Task.isCancelled, active?.id == request.id, player.currentItem === item else { return }
+        var seen = Set<String>()
+        for track in tracks where seen.insert(track.id).inserted { externalSubtitleTracks[track.id] = track }
+        subtitleChoices = nativeSubtitleOptions.keys.sorted().compactMap { id in nativeSubtitleOptions[id].map { SubtitleChoice(id: id, label: $0.displayName) } }
+            + tracks.filter { externalSubtitleTracks[$0.id] != nil }.map { SubtitleChoice(id: $0.id, label: $0.label) }
+        subtitlesLoading = false
+        if subtitleChoices.isEmpty, subtitleStatus == nil { subtitleStatus = burnedInSubtitles ? "These captions are burned into the video. Choose HD-1 or HD-2 for an on/off toggle." : "This source provided no subtitle tracks." }
+        let enabled = UserDefaults.standard.object(forKey: "playerSubtitlesEnabled") == nil ? request.audio == .sub : UserDefaults.standard.bool(forKey: "playerSubtitlesEnabled")
+        guard enabled, !burnedInSubtitles else { return }
+        let previous = UserDefaults.standard.string(forKey: "playerSubtitleTrack")
+        let choice = subtitleChoices.first { $0.label == previous }
+            ?? SubtitleService.preferred(tracks).flatMap { preferred in subtitleChoices.first { $0.id == preferred.id } }
+            ?? subtitleChoices.first { nativeSubtitleOptions[$0.id]?.extendedLanguageTag?.hasPrefix("en") == true }
+            ?? subtitleChoices.first
+        selectSubtitle(choice?.id, persist: false)
+    }
+    @MainActor func reloadSubtitles() {
+        guard let request = active, let item = player.currentItem else { return }
+        subtitleDiscoveryTask?.cancel()
+        subtitleDiscoveryTask = Task { [weak self] in await self?.configureSubtitles(request, item: item) }
+    }
+    @MainActor func selectSubtitle(_ id: String?, persist: Bool = true) {
+        subtitleLoadTask?.cancel(); subtitleLoadTask = nil
+        subtitleCues = []; subtitleText = ""; subtitleSelection = id; subtitleNotice = nil
+        if let group = subtitleGroup { player.currentItem?.select(nil, in: group) }
+        if persist {
+            UserDefaults.standard.set(id != nil, forKey: "playerSubtitlesEnabled")
+            if let choice = subtitleChoices.first(where: { $0.id == id }) { UserDefaults.standard.set(choice.label, forKey: "playerSubtitleTrack") }
+        }
+        guard let id else { subtitlesLoading = false; return }
+        if let option = nativeSubtitleOptions[id], let group = subtitleGroup { player.currentItem?.select(option, in: group); return }
+        guard let track = externalSubtitleTracks[id], let request = active else { return }
+        if let cached = subtitleDocuments[id] { subtitleCues = cached.cues; updateSubtitleText(); return }
+        subtitlesLoading = true
+        subtitleLoadTask = Task { @MainActor [weak self] in
+            do {
+                let document = try await SubtitleService.shared.document(track)
+                try Task.checkCancellation()
+                guard let self, self.active?.id == request.id, self.subtitleSelection == id else { return }
+                self.subtitleDocuments[id] = document; self.subtitleCues = document.cues; self.subtitlesLoading = false
+                self.updateSubtitleText()
+                if let local = request.localURL { try? SubtitleService.save(document, beside: local) }
+            } catch is CancellationError { }
+            catch {
+                guard let self, self.active?.id == request.id, self.subtitleSelection == id else { return }
+                self.subtitlesLoading = false; self.subtitleSelection = nil; self.subtitleNotice = error.localizedDescription
+            }
+        }
+    }
+    private func updateSubtitleText() {
+        let text = SubtitleParser.text(at: player.currentTime().seconds, cues: subtitleCues)
+        if text != subtitleText { subtitleText = text }
     }
 
     private func checkSkip() {
@@ -216,6 +316,7 @@ final class PlaybackController: ObservableObject {
         store?.record(active.anime, episode: active.episode, seconds: seconds, duration: duration, finished: finished || (duration.isFinite && duration > 0 && seconds >= duration - 1))
     }
     func stop() {
+        resetSubtitles()
         saveProgress()
         nextStreamTask?.cancel(); nextStreamTask = nil; nextStreamKey = nil
         player.pause()
@@ -226,9 +327,38 @@ final class PlaybackController: ObservableObject {
     }
 }
 
+final class CaptionPlayerViewController: AVPlayerViewController {
+    private let caption = UILabel()
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        caption.textColor = .white; caption.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        caption.textAlignment = .center; caption.numberOfLines = 0
+        caption.font = .systemFont(ofSize: 22, weight: .medium)
+        caption.layer.cornerRadius = 5; caption.layer.masksToBounds = true
+        caption.isHidden = true; caption.isUserInteractionEnabled = false
+        contentOverlayView?.addSubview(caption)
+    }
+    func setCaption(_ text: String) {
+        loadViewIfNeeded()
+        guard caption.text != text else { return }
+        caption.text = text; caption.isHidden = text.isEmpty
+        view.setNeedsLayout()
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard let overlay = contentOverlayView else { return }
+        let rect = videoBounds.isEmpty ? overlay.bounds : overlay.convert(videoBounds, from: view)
+        let width = max(1, min(overlay.bounds.width - 32, rect.width - 24))
+        caption.font = .systemFont(ofSize: min(26, max(18, rect.width / 25)), weight: .medium)
+        let height = min(180, caption.sizeThatFits(CGSize(width: width - 12, height: 180)).height + 10)
+        caption.frame = CGRect(x: rect.midX - width / 2, y: max(rect.minY, rect.maxY - height - 24), width: width, height: height)
+    }
+}
+
 struct NativePlayer: UIViewControllerRepresentable {
     let player: AVPlayer
     let nativeControls: Bool
+    let subtitleText: String
     let fill: Bool
     let onTap: () -> Void
     let onDoubleTap: (Bool) -> Void
@@ -248,7 +378,8 @@ struct NativePlayer: UIViewControllerRepresentable {
     }
     func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap, onDoubleTap: onDoubleTap) }
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let view = AVPlayerViewController()
+        let view = CaptionPlayerViewController()
+        view.setCaption(subtitleText)
         view.player = player
         view.showsPlaybackControls = nativeControls
         view.videoGravity = fill ? .resizeAspectFill : .resizeAspect
@@ -266,10 +397,14 @@ struct NativePlayer: UIViewControllerRepresentable {
         view.view.addGestureRecognizer(doubleTap)
         return view
     }
+    static func configure(_ view: AVPlayerViewController, player: AVPlayer, nativeControls: Bool, fill: Bool, subtitleText: String) {
+        (view as? CaptionPlayerViewController)?.setCaption(subtitleText)
+        view.player = player
+        view.showsPlaybackControls = nativeControls
+        view.videoGravity = fill ? .resizeAspectFill : .resizeAspect
+    }
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        uiViewController.player = player
-        uiViewController.showsPlaybackControls = nativeControls
-        uiViewController.videoGravity = fill ? .resizeAspectFill : .resizeAspect
+        Self.configure(uiViewController, player: player, nativeControls: nativeControls, fill: fill, subtitleText: subtitleText)
         context.coordinator.onTap = onTap
         context.coordinator.onDoubleTap = onDoubleTap
     }
@@ -314,7 +449,7 @@ struct PlayerScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            NativePlayer(player: controller.player, nativeControls: nativeControls, fill: fillVideo,
+            NativePlayer(player: controller.player, nativeControls: nativeControls, subtitleText: controller.subtitleText, fill: fillVideo,
                 onTap: toggleControls, onDoubleTap: { left in
                     guard !nativeControls, !controller.isPreparing else { return }
                     seek(position + Double(left ? -shortSeek : shortSeek))
@@ -347,6 +482,9 @@ struct PlayerScreen: View {
         .alert("Audio unavailable", isPresented: Binding(get: { controller.audioNotice != nil }, set: { if !$0 { controller.audioNotice = nil } })) {
             Button("OK", role: .cancel) { controller.audioNotice = nil }
         } message: { Text(controller.audioNotice ?? "") }
+        .alert("Subtitles unavailable", isPresented: Binding(get: { controller.subtitleNotice != nil }, set: { if !$0 { controller.subtitleNotice = nil } })) {
+            Button("OK", role: .cancel) { controller.subtitleNotice = nil }
+        } message: { Text(controller.subtitleNotice ?? "") }
         .onChange(of: controller.isPreparing) { _, preparing in
             if preparing { hideControlsTask?.cancel(); controlsVisible = true; position = 0; duration = 0 }
             else { isPlaying = true; scheduleHideControls() }
@@ -372,6 +510,27 @@ struct PlayerScreen: View {
                 .background(.black.opacity(0.65), in: Circle()) }
                 .accessibilityLabel("Close player")
             Spacer(minLength: 8)
+            Menu {
+                if controller.burnedInSubtitles {
+                    Text("This video has burned-in captions. Choose HD-1 or HD-2 for toggleable subtitles.")
+                }
+                Button { controller.selectSubtitle(nil) } label: {
+                    if controller.subtitleSelection == nil { Label("Off", systemImage: "checkmark") } else { Text("Off") }
+                }
+                ForEach(controller.subtitleChoices) { choice in
+                    Button { controller.selectSubtitle(choice.id) } label: {
+                        if controller.subtitleSelection == choice.id { Label(choice.label, systemImage: "checkmark") } else { Text(choice.label) }
+                    }
+                }
+                if controller.subtitlesLoading { Text("Loading subtitles…") }
+                if let status = controller.subtitleStatus {
+                    Text(status)
+                    Button("Retry loading subtitles") { controller.reloadSubtitles() }
+                }
+            } label: {
+                Image(systemName: controller.subtitleSelection == nil ? "captions.bubble" : "captions.bubble.fill")
+                    .font(.subheadline.bold()).frame(width: 40, height: 40).background(.black.opacity(0.65), in: Circle())
+            }.accessibilityLabel("Subtitles")
             if nativeControls {
                 Button("Kairo controls") { nativeControls = false; scheduleHideControls() }
                     .font(.caption.weight(.semibold)).padding(10).background(.black.opacity(0.65), in: Capsule())

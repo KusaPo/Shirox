@@ -177,19 +177,24 @@ actor ReAnimeAPI {
             return ReAnimeServer(id: row["$id"] as? String ?? "\(audio.rawValue)-\(name)", name: name, url: url, audio: audio, hardsub: row["hardsub"] as? Bool ?? false)
         }
     }
+    func subtitleTracks(_ anime: Anime, episode: Int) async throws -> [SubtitleTrack] {
+        let options = try await servers(anime, episode: episode)
+        guard let server = options.first(where: { !$0.hardsub }) ?? options.first else { return [] }
+        return try await nativeResolver.subtitleTracks(server.url)
+    }
+
     func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
         let listed = try await servers(anime, episode: episode).filter { $0.audio == audio }
         guard !listed.isEmpty else { throw KairoError.message("ReAnime lists no \(audio.label) player for episode \(episode). Try the other language.") }
         var results: [StreamOption] = []
         var lastError: Error?
-        // Prefer the site's burned-in subtitles for Sub. Separate ASS files
-        // cannot be rendered by AVPlayer; users can still choose HD-1/HD-2.
-        let ordered = audio == .sub ? listed.filter(\.hardsub) + listed.filter { !$0.hardsub } : listed
+        // Prefer clean video with separate, toggleable captions.
+        let ordered = listed.filter { !$0.hardsub } + listed.filter(\.hardsub)
         for server in ordered {
             do {
                 let media = try await nativeResolver.resolve(server.url)
                 results.append(StreamOption(id: server.id, provider: server.id, url: media.url, headers: ReAnimeMedia.headers, audio: audio,
-                                            label: "ReAnime · \(server.name) · \(audio.shortLabel)", reanimeMedia: media))
+                                            label: "ReAnime · \(server.name) · \(audio.shortLabel)", reanimeMedia: media, burnedInSubtitles: server.hardsub))
             } catch { lastError = error }
         }
         guard !results.isEmpty else { throw lastError ?? KairoError.message("No native ReAnime stream is available.") }
