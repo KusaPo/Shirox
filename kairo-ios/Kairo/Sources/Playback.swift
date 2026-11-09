@@ -338,16 +338,21 @@ final class CaptionPlayerViewController: AVPlayerViewController {
         caption.font = .systemFont(ofSize: 22, weight: .medium)
         caption.layer.cornerRadius = 5; caption.layer.masksToBounds = true
         caption.isHidden = true; caption.isUserInteractionEnabled = false
-        contentOverlayView?.addSubview(caption)
+        attachCaption()
+    }
+    private func attachCaption() {
+        if let overlay = contentOverlayView, caption.superview !== overlay { overlay.addSubview(caption) }
     }
     func setCaption(_ text: String) {
         loadViewIfNeeded()
+        attachCaption()
         guard caption.text != text else { return }
         caption.text = text; caption.isHidden = text.isEmpty
         view.setNeedsLayout()
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        attachCaption()
         guard let overlay = contentOverlayView else { return }
         let rect = videoBounds.isEmpty ? overlay.bounds : overlay.convert(videoBounds, from: view)
         let width = max(1, min(overlay.bounds.width - 32, rect.width - 24))
