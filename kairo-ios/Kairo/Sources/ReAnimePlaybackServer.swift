@@ -109,7 +109,7 @@ import Network
             } else if url.pathExtension.lowercased() == "bin" || url.pathExtension.lowercased() == "key" {
                 bytes = data; type = "application/octet-stream"
             } else {
-                bytes = ReAnimeMedia.unwrap(data); type = "video/mp2t"
+                bytes = await Task.detached(priority: .userInitiated) { ReAnimeMedia.unwrap(data) }.value; type = "video/mp2t"
             }
             var status = "200 OK", headers = ["Content-Type": type, "Cache-Control": "no-store", "Accept-Ranges": "bytes"]
             if let line = lines.first(where: { $0.lowercased().hasPrefix("range:") }) {

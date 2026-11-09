@@ -83,6 +83,15 @@ final class ReAnimeNativeTests: XCTestCase {
         let duration = try await asset.load(.duration)
         XCTAssertGreaterThan(duration.seconds, 1)
     }
+    func testWrappedCiphertextStartingWithTransportSyncByteStillUnwraps() {
+        let ciphertext = Data([0x47 ^ 157, 20, 30, 40, 50, 60, 70, 80])
+        let mask: [UInt8] = [157,42,241,71,179,142,92,112,166,25,228,59,216,98,15,197]
+        let encoded = Data(ciphertext.enumerated().map { $0.element ^ mask[$0.offset % mask.count] })
+        XCTAssertEqual(encoded.first, 0x47)
+        let wrapped = Data([137,80,78,71,13,10,26,10]) + encoded
+        XCTAssertEqual(ReAnimeMedia.unwrap(wrapped), ciphertext)
+    }
+
     func testMediaAllowlistRejectsPrivateAndLookalikeHostsAndRangeIsBounded() {
         for text in ["https://127.0.0.1/segment.ts", "https://flixcloud.cc.evil.example/x", "http://a.flixcloud.cc/x", "https://a.flixcloud.cc:8443/x", "https://user:pass@a.flixcloud.cc/x"] {
             XCTAssertFalse(ReAnimeMedia.permits(URL(string: text)!))

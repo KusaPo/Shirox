@@ -32,7 +32,10 @@ struct ReAnimeMedia: Equatable {
         guard offset > 0 else { return data }
         var bytes = Data(data.dropFirst(offset))
         let mask: [UInt8] = [157,42,241,71,179,142,92,112,166,25,228,59,216,98,15,197]
-        if bytes.first != 0x47 { for index in bytes.indices { bytes[index] ^= mask[index % mask.count] } }
+        // AES ciphertext may coincidentally start with 0x47. Confirm multiple
+        // TS sync bytes before treating an image payload as already clear.
+        let clearTransport = bytes.count > 376 && bytes[0] == 0x47 && bytes[188] == 0x47 && bytes[376] == 0x47
+        if !clearTransport { for index in bytes.indices { bytes[index] ^= mask[index % mask.count] } }
         return bytes
     }
 }

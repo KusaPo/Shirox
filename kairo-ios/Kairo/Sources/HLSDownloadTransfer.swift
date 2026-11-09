@@ -235,7 +235,7 @@ actor HLSDownloadTransfer {
     }
     private func backgroundResource(_ url: URL, name: String, range: HLSByteRange?, key: HLSKey?, sequence: Int, headers: [String: String]) async throws -> BackgroundHLSResource {
         if reanimeMedia != nil, !ReAnimeMedia.permits(url) { throw KairoError.message("Unsupported ReAnime media host.") }
-        let identity = "\(reanimeMedia == nil ? "standard" : "reanime-v1")|\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
+        let identity = "\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)" + (reanimeMedia == nil ? "" : "|reanime-v1")
         let hash = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         var keyData: Data?, iv: Data?
         if let key {
@@ -303,7 +303,7 @@ actor HLSDownloadTransfer {
         // Identity includes the key, IV, sequence and range: a renewed signed URL never reuses
         // unrelated old bytes just because the segment has the same list index.
         if reanimeMedia != nil, !ReAnimeMedia.permits(url) { throw KairoError.message("Unsupported ReAnime media host.") }
-        let identity = "\(reanimeMedia == nil ? "standard" : "reanime-v1")|\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
+        let identity = "\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)" + (reanimeMedia == nil ? "" : "|reanime-v1")
         let hash = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         let marker = target.appendingPathExtension("sha256")
         if let saved = try? String(contentsOf: marker, encoding: .utf8), saved == hash,
