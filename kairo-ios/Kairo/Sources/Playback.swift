@@ -74,7 +74,10 @@ final class PlaybackController: ObservableObject {
             guard let url = request.localURL ?? request.stream?.url else { throw KairoError.message("The player has no media URL.") }
             if request.localURL != nil, !FileManager.default.fileExists(atPath: url.path) { throw KairoError.message("This downloaded file is no longer on the device.") }
             let headers = request.localURL == nil ? request.stream?.headers ?? [:] : [:]
-            let playbackURL = try await OfflineHLSServer.shared.playbackURL(for: url)
+            let playbackURL: URL
+            if request.localURL == nil, let media = request.stream?.reanimeMedia {
+                playbackURL = try await ReAnimePlaybackServer.shared.playbackURL(media)
+            } else { playbackURL = try await OfflineHLSServer.shared.playbackURL(for: url) }
             let asset = AVURLAsset(url: playbackURL, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
             guard try await asset.load(.isPlayable) else { throw KairoError.message("This stream was found but iOS cannot play its format. Try another provider.") }
             try Task.checkCancellation()

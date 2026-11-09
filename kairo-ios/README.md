@@ -40,7 +40,7 @@ To make the same IPA on a Mac with Xcode installed, run `bash kairo-ios/scripts/
 - Single or next-three episode downloads, two concurrent transfers, queue/pause/retry/remove, separate Wi-Fi/cellular background sessions, restored task records, local offline playback, and file deletion that preserves history.
 - HLS downloads use Apple's current AVAssetDownloadConfiguration API. Preparation checks whether the asset is playable, protected, and has a finite duration; failures include the native error domain/code when available. Embedded English subtitles are selected when offered. Direct video downloads use background URLSession transfers. Readiness includes a local playable-media check.
 - Install compatible Luna/Sora JavaScript source manifests in Sources, then select them from the small source-name menu in Discover.
-- ReAnime is a built-in catalog source. Native playback and offline saving require the separately hosted media gateway documented in [REANIME_NATIVE.md](REANIME_NATIVE.md). This integration is a prototype until live iPhone playback and a full offline download have been verified; the previous FlixCloud web-player screen is no longer opened from episode actions.
+- ReAnime is built in and resolves FlixCloud media on the iPhone. Playback stays in the native player; downloads use direct CDN requests with on-device playlist/segment conversion. No Mac, hosted gateway, address, or access key is required. See [REANIME_NATIVE.md](REANIME_NATIVE.md) for the pipeline and remaining device checks.
 
 ## Explicitly unfinished
 

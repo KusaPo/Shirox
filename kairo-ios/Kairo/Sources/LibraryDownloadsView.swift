@@ -102,8 +102,6 @@ struct SourcesView: View {
     @AppStorage("playerSeekLong") private var longSeek = 85
     @State private var sourceLink = ""
     @State private var reanimeLink = ""
-    @AppStorage("reanimeGatewayURL") private var reanimeGatewayURL = ""
-    @AppStorage("reanimeGatewayKey") private var reanimeGatewayKey = ""
     @State private var reanimeDestination: ReAnimeDestination?
     @State private var reanimeLinkError: String?
     @State private var manifestMessage: String?
@@ -153,17 +151,11 @@ struct SourcesView: View {
             Section {
                 Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
                 Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
-                Text("ReAnime is built in. Native playback and offline saving need a configured media gateway.")
+                Text("ReAnime resolves media on this device for native playback and offline saving.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Sources") }
             Section("ReAnime native media") {
-                TextField("https://your-gateway.example", text: $reanimeGatewayURL)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                SecureField("Gateway access key", text: $reanimeGatewayKey)
-                if !reanimeGatewayURL.isEmpty && ReAnimeAPI.gatewayURL(reanimeGatewayURL) == nil {
-                    Text("Enter an HTTPS gateway address without a query or fragment.").font(.caption).foregroundStyle(.red)
-                }
-                Text("The gateway resolves ReAnime servers and serves standard HLS to Kairo's player and downloader. See REANIME_NATIVE.md for setup. Your playback requests pass through that gateway.")
+                Text("Playback and downloads run directly on your iPhone. No Mac or external media gateway is needed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {

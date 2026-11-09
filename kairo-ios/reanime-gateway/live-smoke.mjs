@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { resolveEmbed } from './resolve.mjs';
 import { decodePlaylist, unwrapSegment } from './server.mjs';
 
@@ -18,12 +19,22 @@ for (let level = 0; level < 3; level++) {
   const playlist = decodePlaylist(Buffer.from(await response.arrayBuffer()), resolved.playlistKey);
   const next = playlist.split(/\r?\n/).find(line => line && !line.startsWith('#'));
   if (!next) throw new Error('Playlist has no media URI');
-  url = new URL(next, url);
-  if (!url.hostname.endsWith('.flixcloud.cc')) throw new Error('Media URL left FlixCloud');
+  url = new URL(next, response.url);
+  if (!url.hostname.endsWith('.flixcloud.cc') && !url.hostname.endsWith('.rundowncdn.top')) throw new Error('Media URL left the known ReAnime CDNs');
   if (!url.pathname.endsWith('.m3u8')) {
     const segment = await fetch(url, { headers });
     if (!segment.ok) throw new Error(`Segment HTTP ${segment.status}`);
-    const bytes = unwrapSegment(Buffer.from(await segment.arrayBuffer()));
+    let bytes = unwrapSegment(Buffer.from(await segment.arrayBuffer()));
+    const keyLine = playlist.split(/\r?\n/).find(line => line.startsWith('#EXT-X-KEY:'));
+    if (keyLine?.includes('METHOD=AES-128')) {
+      const keyPath = /URI="([^"]+)"/.exec(keyLine)?.[1], ivHex = /IV=0x([a-f0-9]+)/i.exec(keyLine)?.[1];
+      if (!keyPath || !ivHex) throw new Error('Smoke test needs an explicit HLS key and IV');
+      const keyResponse = await fetch(new URL(keyPath, response.url), {headers});
+      if (!keyResponse.ok) throw new Error('HLS key request failed');
+      const key = Buffer.from(await keyResponse.arrayBuffer());
+      const cipher = crypto.createDecipheriv('aes-128-cbc', key, Buffer.from(ivHex, 'hex'));
+      bytes = Buffer.concat([cipher.update(bytes), cipher.final()]);
+    }
     if (!bytes.length || ![0x47, 0x00].includes(bytes[0])) throw new Error('Segment format is not verified');
     console.log(`Verified ReAnime HD-1 dub playlist and ${bytes.length}-byte first segment`);
     process.exit(0);

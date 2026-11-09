@@ -33,6 +33,7 @@ struct StreamOption: Identifiable {
     var headers: [String: String]
     var audio: AudioChoice
     var label: String
+    var reanimeMedia: ReAnimeMedia? = nil
     var preview: EpisodeImageResource? = nil
     var isHLS: Bool { url.pathExtension.lowercased() == "m3u8" }
     var isEmbedded: Bool { url.host == "flixcloud.cc" && url.path.hasPrefix("/e/") }

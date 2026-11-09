@@ -51,7 +51,7 @@ actor DownloadHTTPClient {
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     private let transport: Transport
     private let gate: DownloadHostGate
-    init(wifiOnly: Bool = true, gate: DownloadHostGate = .shared, transport: Transport? = nil) {
+    init(wifiOnly: Bool = true, reanime: Bool = false, gate: DownloadHostGate = .shared, transport: Transport? = nil) {
         self.gate = gate
         if let transport { self.transport = transport }
         else {
@@ -61,7 +61,7 @@ actor DownloadHTTPClient {
             config.timeoutIntervalForRequest = 30
             config.timeoutIntervalForResource = 120
             config.httpMaximumConnectionsPerHost = 1
-            let session = URLSession(configuration: config)
+            let session = URLSession(configuration: config, delegate: reanime ? ReAnimeRedirects() : nil, delegateQueue: nil)
             self.transport = { request in
                 let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else { throw KairoError.message("The media server returned an invalid response.") }
@@ -139,7 +139,8 @@ actor DownloadHTTPClient {
 actor HLSDownloadTransfer {
     private let client: DownloadHTTPClient
     private var keys: [URL: Data] = [:]
-    init(client: DownloadHTTPClient) { self.client = client }
+    private let reanimeMedia: ReAnimeMedia?
+    init(client: DownloadHTTPClient, reanimeMedia: ReAnimeMedia? = nil) { self.client = client; self.reanimeMedia = reanimeMedia }
     func download(url: URL, headers: [String: String], folder: URL,
                   onProgress: @escaping @Sendable (Double) -> Void,
                   onWait: @escaping @Sendable (TimeInterval) -> Void) async throws -> URL {
@@ -233,11 +234,13 @@ actor HLSDownloadTransfer {
         return BackgroundHLSJob(id: id, wifiOnly: wifiOnly, headers: headers, resources: resources, manifests: manifests)
     }
     private func backgroundResource(_ url: URL, name: String, range: HLSByteRange?, key: HLSKey?, sequence: Int, headers: [String: String]) async throws -> BackgroundHLSResource {
-        let identity = "\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
+        if reanimeMedia != nil, !ReAnimeMedia.permits(url) { throw KairoError.message("Unsupported ReAnime media host.") }
+        let identity = "\(reanimeMedia == nil ? "standard" : "reanime-v1")|\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
         let hash = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         var keyData: Data?, iv: Data?
         if let key {
             guard key.method == .aes128, let address = key.url else { throw KairoError.message("Unsupported HLS encryption.") }
+            if reanimeMedia != nil, !ReAnimeMedia.permits(address) { throw KairoError.message("Unsupported ReAnime key host.") }
             if let cached = keys[address] { keyData = cached }
             else {
                 let bytes = try await client.fetch(address, headers: headers).0
@@ -246,10 +249,15 @@ actor HLSDownloadTransfer {
             }
             iv = Data(key.iv ?? HLSManifestParser.defaultIV(forMediaSequence: sequence))
         }
-        return BackgroundHLSResource(url: url, name: name, range: range, key: keyData, iv: iv, identity: hash)
+        return BackgroundHLSResource(url: url, name: name, range: range, key: keyData, iv: iv, identity: hash, reanimeWrapped: reanimeMedia != nil ? true : nil)
     }
     private func manifest(_ url: URL, headers: [String: String], onWait: @escaping @Sendable (TimeInterval) -> Void) async throws -> (String, URL) {
+        if reanimeMedia != nil, !ReAnimeMedia.permits(url) { throw KairoError.message("Unsupported ReAnime playlist host.") }
         let (data, final) = try await client.fetch(url, headers: headers, onWait: onWait)
+        if let reanimeMedia {
+            guard ReAnimeMedia.permits(final) else { throw KairoError.message("Unsupported ReAnime playlist redirect.") }
+            return (try reanimeMedia.playlist(data), final)
+        }
         guard let text = String(data: data, encoding: .utf8), text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else {
             throw KairoError.message("The source returned a page instead of a standard HLS playlist.")
         }
@@ -294,14 +302,17 @@ actor HLSDownloadTransfer {
                           headers: [String: String], onWait: @escaping @Sendable (TimeInterval) -> Void) async throws {
         // Identity includes the key, IV, sequence and range: a renewed signed URL never reuses
         // unrelated old bytes just because the segment has the same list index.
-        let identity = "\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
+        if reanimeMedia != nil, !ReAnimeMedia.permits(url) { throw KairoError.message("Unsupported ReAnime media host.") }
+        let identity = "\(reanimeMedia == nil ? "standard" : "reanime-v1")|\(url.absoluteString)|\(String(describing: range))|\(String(describing: key))|\(sequence)"
         let hash = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         let marker = target.appendingPathExtension("sha256")
         if let saved = try? String(contentsOf: marker, encoding: .utf8), saved == hash,
            let size = try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 { return }
         var (data, _) = try await client.fetch(url, headers: headers, range: range, onWait: onWait)
+        if reanimeMedia != nil { data = ReAnimeMedia.unwrap(data) }
         if let key {
             guard key.method == .aes128, let address = key.url else { throw KairoError.message("Unsupported HLS encryption.") }
+            if reanimeMedia != nil, !ReAnimeMedia.permits(address) { throw KairoError.message("Unsupported ReAnime key host.") }
             let keyData: Data
             if let cached = keys[address] { keyData = cached }
             else {

@@ -11,12 +11,14 @@ struct BackgroundHLSResource: Codable {
     var complete = false
     var attempts = 0
     var token: String?
+    var reanimeWrapped: Bool? = nil
 
     func install(_ location: URL, response: HTTPURLResponse, folder: URL) throws {
         guard (200..<300).contains(response.statusCode) else {
             throw KairoError.message("The media server returned HTTP \(response.statusCode).")
         }
         var bytes = try Data(contentsOf: location)
+        if reanimeWrapped == true { bytes = ReAnimeMedia.unwrap(bytes) }
         if let range {
             guard range.offset >= 0, range.length > 0, range.offset <= Int.max - range.length else {
                 throw KairoError.message("Invalid media byte range.")
@@ -250,6 +252,14 @@ final class BackgroundHLSDownload: NSObject, URLSessionDownloadDelegate {
             store.updateDownload(id) { $0.state = .downloading; $0.fraction = min(0.99, job.fraction) }
         }
     }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let token = task.taskDescription, let (id, index) = find(token),
+              let job = jobs[id], job.resources[index].reanimeWrapped == true else { completionHandler(request); return }
+        guard let url = request.url, ReAnimeMedia.permits(url) else { completionHandler(nil); return }
+        var clean = request; clean.allHTTPHeaderFields = ReAnimeMedia.headers; completionHandler(clean)
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         guard let token = downloadTask.taskDescription, let (id, i) = find(token), let job = jobs[id], !job.paused, job.failure == nil else { return }
         guard let response = downloadTask.response as? HTTPURLResponse else { fail(id, "The media server returned an invalid response."); return }

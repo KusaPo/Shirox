@@ -217,7 +217,7 @@ final class DownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate
         }
         defer { if backgroundID != .invalid { UIApplication.shared.endBackgroundTask(backgroundID) } }
         store.updateDownload(item.id) { $0.message = "Preparing background download…" }
-        let transfer = HLSDownloadTransfer(client: DownloadHTTPClient(wifiOnly: wifiOnly))
+        let transfer = HLSDownloadTransfer(client: DownloadHTTPClient(wifiOnly: wifiOnly, reanime: stream.reanimeMedia != nil), reanimeMedia: stream.reanimeMedia)
         let job = try await transfer.prepareBackground(id: item.id, url: stream.url, headers: stream.headers, folder: folder, wifiOnly: wifiOnly)
         try Task.checkCancellation()
         guard store.state.downloads.contains(where: { $0.id == item.id }) else { return }

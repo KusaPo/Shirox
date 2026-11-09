@@ -22,20 +22,14 @@ struct ReAnimeServer: Identifiable {
 actor ReAnimeAPI {
     static let shared = ReAnimeAPI()
     static let moduleID = "builtin:reanime"
-    // A media gateway is required because /api/flix only returns embed pages.
-    // The gateway must serve ordinary HLS playlists and segments over HTTPS.
-    static func gatewayURL(_ value: String) -> URL? {
-        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
-              (url.path.isEmpty || url.path == "/"), url.query == nil, url.fragment == nil else { return nil }
-        return url
-    }
     private let session: URLSession
+    private let nativeResolver: ReAnimeNativeResolver
     init(configuration provided: URLSessionConfiguration? = nil) {
         let configuration = provided ?? URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 35
         session = URLSession(configuration: configuration)
+        nativeResolver = ReAnimeNativeResolver(configuration: configuration)
     }
     static func slug(_ anime: Anime) -> String? {
         guard anime.moduleID == moduleID, let value = anime.sourceID, !value.isEmpty,
@@ -185,47 +179,17 @@ actor ReAnimeAPI {
     func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
         let listed = try await servers(anime, episode: episode).filter { $0.audio == audio }
         guard !listed.isEmpty else { throw KairoError.message("ReAnime lists no \(audio.label) player for episode \(episode). Try the other language.") }
-        guard let gateway = Self.gatewayURL(UserDefaults.standard.string(forKey: "reanimeGatewayURL") ?? "") else {
-            throw KairoError.message("ReAnime native playback needs a media gateway. Set its HTTPS address in Sources & preferences.")
-        }
         var results: [StreamOption] = []
         var lastError: Error?
         for server in listed {
             do {
-                let media = try await nativeStream(server, gateway: gateway)
-                results.append(StreamOption(id: server.id, provider: server.id, url: media, headers: [:], audio: audio,
-                                            label: "ReAnime · \(server.name) · \(audio.shortLabel)"))
+                let media = try await nativeResolver.resolve(server.url)
+                results.append(StreamOption(id: server.id, provider: server.id, url: media.url, headers: ReAnimeMedia.headers, audio: audio,
+                                            label: "ReAnime · \(server.name) · \(audio.shortLabel)", reanimeMedia: media))
             } catch { lastError = error }
         }
         guard !results.isEmpty else { throw lastError ?? KairoError.message("No native ReAnime stream is available.") }
         return results
     }
 
-    private func nativeStream(_ server: ReAnimeServer, gateway: URL) async throws -> URL {
-        var parts = URLComponents(url: gateway.appendingPathComponent("resolve"), resolvingAgainstBaseURL: false)!
-        parts.queryItems = [URLQueryItem(name: "embed", value: server.url.absoluteString)]
-        var request = URLRequest(url: parts.url!)
-        if let access = UserDefaults.standard.string(forKey: "reanimeGatewayKey"), !access.isEmpty {
-            request.setValue(access, forHTTPHeaderField: "X-Kairo-Access")
-        }
-        let (data, response) = try await session.data(for: request)
-        try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              data.count < 16_384, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let raw = object["url"] as? String, let url = URL(string: raw),
-              url.scheme == "https", url.host == gateway.host, url.pathExtension.lowercased() == "m3u8" else {
-            throw KairoError.message("The ReAnime gateway did not return a usable HTTPS HLS stream.")
-        }
-        var probe = URLRequest(url: url)
-        probe.timeoutInterval = 15
-        let (manifest, manifestResponse) = try await session.data(for: probe)
-        try Task.checkCancellation()
-        guard (manifestResponse as? HTTPURLResponse)?.statusCode == 200,
-              manifest.count < 1_000_000,
-              String(data: manifest.prefix(32), encoding: .utf8)?.hasPrefix("#EXTM3U") == true else {
-            throw KairoError.message("The ReAnime gateway did not supply an iOS-compatible HLS playlist.")
-        }
-        return url
-    }
 }
-
