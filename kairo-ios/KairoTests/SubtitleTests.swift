@@ -78,6 +78,26 @@ final class SubtitleTests: XCTestCase {
         XCTAssertEqual(job.resources[0].url.lastPathComponent, "segment.ts")
     }
 
+    @MainActor func testSubtitleAppearanceChangesExistingCaptionWithoutReplacingPlayer() throws {
+        let view = CaptionPlayerViewController(), player = AVPlayer()
+        view.view.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
+        NativePlayer.configure(view, player: player, nativeControls: false, fill: false, subtitleText: "Caption preview")
+        view.view.layoutIfNeeded()
+        let label = try XCTUnwrap(view.contentOverlayView?.subviews.compactMap { $0 as? UILabel }.first)
+        let originalSize = label.font.pointSize
+        NativePlayer.configure(view, player: player, nativeControls: false, fill: false, subtitleText: "Caption preview", subtitleBackground: false, subtitleScale: 1.5)
+        view.view.layoutIfNeeded()
+        XCTAssertEqual(label.backgroundColor, UIColor.clear)
+        XCTAssertEqual(label.font.pointSize, originalSize * 1.5, accuracy: 0.1)
+        XCTAssertEqual(label.text, "Caption preview")
+        XCTAssertFalse(label.isHidden)
+        XCTAssertTrue(view.player === player)
+        NativePlayer.configure(view, player: player, nativeControls: false, fill: false, subtitleText: "Caption preview")
+        view.view.layoutIfNeeded()
+        XCTAssertEqual(label.backgroundColor, UIColor.black.withAlphaComponent(0.65))
+        XCTAssertEqual(label.font.pointSize, originalSize, accuracy: 0.1)
+    }
+
     @MainActor func testProgressAndCaptionRefreshesDoNotReattachTheAudioPlayer() {
         let controller = CountingPlayerController(), player = AVPlayer()
         for _ in 0..<20 { NativePlayer.configure(controller, player: player, nativeControls: false, fill: false, subtitleText: "") }

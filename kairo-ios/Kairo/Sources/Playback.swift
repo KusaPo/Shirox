@@ -331,6 +331,32 @@ final class PlaybackController: ObservableObject {
 
 final class CaptionPlayerViewController: AVPlayerViewController {
     private let caption = UILabel()
+    private var subtitleBackground = true
+    private var subtitleScale = 1.0
+    private weak var styledItem: AVPlayerItem?
+
+    func setSubtitleAppearance(background: Bool, scale: Double) {
+        loadViewIfNeeded()
+        let scale = scale.isFinite ? min(2, max(0.5, scale)) : 1
+        let changed = subtitleBackground != background || subtitleScale != scale
+        if changed {
+            subtitleBackground = background; subtitleScale = scale
+            caption.backgroundColor = background ? UIColor.black.withAlphaComponent(0.65) : .clear
+            caption.shadowColor = background ? nil : .black
+            caption.shadowOffset = CGSize(width: 1, height: 1)
+            view.setNeedsLayout()
+        }
+        if let item = player?.currentItem, changed || styledItem !== item {
+            // Apply the same preferences to embedded text subtitle tracks.
+            let color: [CGFloat] = [background ? 0.65 : 0, 0, 0, 0]
+            if let rule = AVTextStyleRule(textMarkupAttributes: [
+                kCMTextMarkupAttribute_BackgroundColorARGB as String: color,
+                kCMTextMarkupAttribute_CharacterBackgroundColorARGB as String: color,
+                kCMTextMarkupAttribute_RelativeFontSize as String: scale * 100
+            ]) { item.textStyleRules = [rule] }
+            styledItem = item
+        }
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
         caption.textColor = .white; caption.backgroundColor = UIColor.black.withAlphaComponent(0.65)
@@ -356,8 +382,9 @@ final class CaptionPlayerViewController: AVPlayerViewController {
         guard let overlay = contentOverlayView else { return }
         let rect = videoBounds.isEmpty ? overlay.bounds : overlay.convert(videoBounds, from: view)
         let width = max(1, min(overlay.bounds.width - 32, rect.width - 24))
-        caption.font = .systemFont(ofSize: min(26, max(18, rect.width / 25)), weight: .medium)
-        let height = min(180, caption.sizeThatFits(CGSize(width: width - 12, height: 180)).height + 10)
+        caption.font = .systemFont(ofSize: min(26, max(18, rect.width / 25)) * CGFloat(subtitleScale), weight: .medium)
+        let maxHeight = max(1, rect.height - 48)
+        let height = min(maxHeight, caption.sizeThatFits(CGSize(width: max(1, width - 12), height: .greatestFiniteMagnitude)).height + 10)
         caption.frame = CGRect(x: rect.midX - width / 2, y: max(rect.minY, rect.maxY - height - 24), width: width, height: height)
     }
 }
@@ -366,6 +393,8 @@ struct NativePlayer: UIViewControllerRepresentable {
     let player: AVPlayer
     let nativeControls: Bool
     let subtitleText: String
+    var subtitleBackground = true
+    var subtitleScale = 1.0
     let fill: Bool
     let onTap: () -> Void
     let onDoubleTap: (Bool) -> Void
@@ -388,6 +417,7 @@ struct NativePlayer: UIViewControllerRepresentable {
         let view = CaptionPlayerViewController()
         view.setCaption(subtitleText)
         view.player = player
+        view.setSubtitleAppearance(background: subtitleBackground, scale: subtitleScale)
         view.showsPlaybackControls = nativeControls
         view.videoGravity = fill ? .resizeAspectFill : .resizeAspect
         view.allowsPictureInPicturePlayback = true
@@ -404,16 +434,17 @@ struct NativePlayer: UIViewControllerRepresentable {
         view.view.addGestureRecognizer(doubleTap)
         return view
     }
-    static func configure(_ view: AVPlayerViewController, player: AVPlayer, nativeControls: Bool, fill: Bool, subtitleText: String) {
+    static func configure(_ view: AVPlayerViewController, player: AVPlayer, nativeControls: Bool, fill: Bool, subtitleText: String, subtitleBackground: Bool = true, subtitleScale: Double = 1) {
         (view as? CaptionPlayerViewController)?.setCaption(subtitleText)
         // Time/progress/caption updates must not reconfigure the audio player.
         if view.player !== player { view.player = player }
+        (view as? CaptionPlayerViewController)?.setSubtitleAppearance(background: subtitleBackground, scale: subtitleScale)
         if view.showsPlaybackControls != nativeControls { view.showsPlaybackControls = nativeControls }
         let gravity: AVLayerVideoGravity = fill ? .resizeAspectFill : .resizeAspect
         if view.videoGravity != gravity { view.videoGravity = gravity }
     }
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        Self.configure(uiViewController, player: player, nativeControls: nativeControls, fill: fill, subtitleText: subtitleText)
+        Self.configure(uiViewController, player: player, nativeControls: nativeControls, fill: fill, subtitleText: subtitleText, subtitleBackground: subtitleBackground, subtitleScale: subtitleScale)
         context.coordinator.onTap = onTap
         context.coordinator.onDoubleTap = onDoubleTap
     }
@@ -440,6 +471,9 @@ struct PlayerScreen: View {
     @AppStorage("playerFillVideo") private var fillVideo = false
     @AppStorage("playerSeekShort") private var shortSeek = 10
     @AppStorage("playerSeekLong") private var longSeek = 85
+    @AppStorage("playerSubtitleBackground") private var subtitleBackground = true
+    @AppStorage("playerSubtitleScale") private var subtitleScale = 1.0
+    @State private var showingSubtitleAppearance = false
     @State private var transitionTask: Task<Void, Never>?
     @State private var controlsVisible = true
     @State private var hideControlsTask: Task<Void, Never>?
@@ -458,7 +492,7 @@ struct PlayerScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            NativePlayer(player: controller.player, nativeControls: nativeControls, subtitleText: controller.subtitleText, fill: fillVideo,
+            NativePlayer(player: controller.player, nativeControls: nativeControls, subtitleText: controller.subtitleText, subtitleBackground: subtitleBackground, subtitleScale: subtitleScale, fill: fillVideo,
                 onTap: toggleControls, onDoubleTap: { left in
                     guard !nativeControls, !controller.isPreparing else { return }
                     seek(position + Double(left ? -shortSeek : shortSeek))
@@ -485,6 +519,11 @@ struct PlayerScreen: View {
         }
         .overlay(alignment: .top) { if controlsVisible { topControls.transition(.opacity) } }
         .animation(.easeInOut(duration: 0.22), value: controlsVisible)
+        .sheet(isPresented: $showingSubtitleAppearance, onDismiss: { scheduleHideControls() }) {
+            subtitleAppearance
+                .presentationDetents([.medium, .large])
+                .preferredColorScheme(.dark)
+        }
         .preferredColorScheme(.dark)
         .task { controller.autoSkip = autoSkipIntro; await controller.open(request, store: store) }
         .onAppear { startObserving() }
@@ -531,6 +570,11 @@ struct PlayerScreen: View {
                         if controller.subtitleSelection == choice.id { Label(choice.label, systemImage: "checkmark") } else { Text(choice.label) }
                     }
                 }
+                Divider()
+                Button("Subtitle appearance…") {
+                    hideControlsTask?.cancel()
+                    showingSubtitleAppearance = true
+                }
                 if controller.subtitlesLoading { Text("Loading subtitles…") }
                 if let status = controller.subtitleStatus {
                     Text(status)
@@ -574,6 +618,43 @@ struct PlayerScreen: View {
                 }.accessibilityLabel("Playback settings")
             }
         }.foregroundStyle(.white).padding()
+    }
+    private var subtitleAppearance: some View {
+        NavigationStack {
+            Form {
+                Section("Preview") {
+                    Text("This is how your subtitles will look.")
+                        .font(.system(size: 22 * min(2, max(0.5, subtitleScale)), weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .shadow(color: subtitleBackground ? .clear : .black, radius: 1, x: 1, y: 1)
+                        .padding(8)
+                        .background(subtitleBackground ? Color.black.opacity(0.65) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                        .frame(maxWidth: .infinity, minHeight: 90)
+                        .listRowBackground(Color.gray.opacity(0.3))
+                }
+                Section {
+                    Toggle("Subtitle background", isOn: $subtitleBackground)
+                    HStack {
+                        Text("Text size")
+                        Spacer()
+                        Text("\(Int((subtitleScale * 100).rounded()))%")
+                            .foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Slider(value: $subtitleScale, in: 0.5...2, step: 0.05)
+                        .accessibilityLabel("Subtitle text size")
+                        .accessibilityValue("\(Int((subtitleScale * 100).rounded())) percent")
+                    Button("Reset appearance") { subtitleBackground = true; subtitleScale = 1 }
+                } footer: {
+                    Text("Changes apply immediately and are saved for future episodes. Captions baked into the video cannot be restyled.")
+                }
+            }
+            .navigationTitle("Subtitle appearance")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { showingSubtitleAppearance = false }
+            } }
+        }
     }
     private var customControls: some View {
         VStack {
@@ -665,7 +746,7 @@ struct PlayerScreen: View {
         hideControlsTask?.cancel()
         hideControlsTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
-            if !Task.isCancelled && !scrubbing { controlsVisible = false }
+            if !Task.isCancelled && !scrubbing && !showingSubtitleAppearance { controlsVisible = false }
         }
     }
 }
