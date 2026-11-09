@@ -84,7 +84,7 @@ final class ReAnimeNativeTests: XCTestCase {
         XCTAssertGreaterThan(duration.seconds, 1)
     }
     func testWrappedCiphertextStartingWithTransportSyncByteStillUnwraps() {
-        let ciphertext = Data([0x47 ^ 157, 20, 30, 40, 50, 60, 70, 80])
+        let ciphertext = Data([UInt8(0x47) ^ UInt8(157), 20, 30, 40, 50, 60, 70, 80])
         let mask: [UInt8] = [157,42,241,71,179,142,92,112,166,25,228,59,216,98,15,197]
         let encoded = Data(ciphertext.enumerated().map { $0.element ^ mask[$0.offset % mask.count] })
         XCTAssertEqual(encoded.first, 0x47)
