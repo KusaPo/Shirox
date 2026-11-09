@@ -1,0 +1,3 @@
+node_modules/
+.gateway-env
+*.log
