@@ -17,6 +17,7 @@ struct ReAnimeServer: Identifiable {
     let name: String
     let url: URL
     let audio: AudioChoice
+    var hardsub = false
 }
 
 actor ReAnimeAPI {
@@ -173,7 +174,7 @@ actor ReAnimeAPI {
                   let type = row["dataType"] as? String,
                   let audio = type.contains("dub") ? AudioChoice.dub : (type.contains("sub") ? .sub : nil) else { return nil }
             let name = row["serverName"] as? String ?? "Player"
-            return ReAnimeServer(id: row["$id"] as? String ?? "\(audio.rawValue)-\(name)", name: name, url: url, audio: audio)
+            return ReAnimeServer(id: row["$id"] as? String ?? "\(audio.rawValue)-\(name)", name: name, url: url, audio: audio, hardsub: row["hardsub"] as? Bool ?? false)
         }
     }
     func streams(_ anime: Anime, episode: Int, audio: AudioChoice) async throws -> [StreamOption] {
@@ -181,7 +182,10 @@ actor ReAnimeAPI {
         guard !listed.isEmpty else { throw KairoError.message("ReAnime lists no \(audio.label) player for episode \(episode). Try the other language.") }
         var results: [StreamOption] = []
         var lastError: Error?
-        for server in listed {
+        // Prefer the site's burned-in subtitles for Sub. Separate ASS files
+        // cannot be rendered by AVPlayer; users can still choose HD-1/HD-2.
+        let ordered = audio == .sub ? listed.filter(\.hardsub) + listed.filter { !$0.hardsub } : listed
+        for server in ordered {
             do {
                 let media = try await nativeResolver.resolve(server.url)
                 results.append(StreamOption(id: server.id, provider: server.id, url: media.url, headers: ReAnimeMedia.headers, audio: audio,

@@ -97,6 +97,8 @@ final class ReAnimeNativeTests: XCTestCase {
             XCTAssertFalse(ReAnimeMedia.permits(URL(string: text)!))
         }
         XCTAssertTrue(ReAnimeMedia.permits(URL(string: "https://vault-92.rundowncdn.top/seg.webp")!))
+        XCTAssertTrue(ReAnimeMedia.permits(URL(string: "https://vault-93.kineticcdn.top/seg.webp")!))
+        XCTAssertTrue(ReAnimeMedia.permits(URL(string: "https://vault-99.ignitecdn.top/seg.webp")!))
         XCTAssertEqual(ReAnimePlaybackServer.byteRange("bytes=2-999", count: 10), 2..<10)
         XCTAssertEqual(ReAnimePlaybackServer.byteRange("bytes=-3", count: 10), 7..<10)
         XCTAssertNil(ReAnimePlaybackServer.byteRange("bytes=10-20", count: 10))

@@ -20,7 +20,7 @@ private final class ReAnimeContractProtocol: URLProtocol {
         case "/api/v1/home":
             body = #"{"trending":[{"anime_id":"sample-season-abc123","title":{"english":"Sample Season"},"genres":["Fantasy"]}],"latest_aired":[{"anime_id":"recent-abc123","title":{"english":"Recent"},"genres":["Action"]}],"new_on_site":[]}"#
         case "/api/flix/178789/1":
-            body = #"{"success":true,"servers":[{"$id":"hd1-sub","serverName":"HD-1","dataLink":"https://flixcloud.cc/e/abc123?v=1","dataType":"sub"},{"$id":"hd2-dub","serverName":"HD-2","dataLink":"https://flixcloud.cc/e/abc123?v=2","dataType":"dub"},{"$id":"bad","dataLink":"https://other.example/e/x","dataType":"dub"}]}"#
+            body = #"{"success":true,"servers":[{"$id":"hd1-sub","serverName":"HD-1","dataLink":"https://flixcloud.cc/e/abc123?v=1","dataType":"sub"},{"$id":"hd2-dub","serverName":"HD-2","dataLink":"https://flixcloud.cc/e/abc123?v=2","dataType":"dub"},{"$id":"hsub-sub","serverName":"H-SUB","dataLink":"https://flixcloud.cc/e/abc123?v=3","dataType":"sub","hardsub":true},{"$id":"bad","dataLink":"https://other.example/e/x","dataType":"dub"}]}"#
         case "/e/abc123": body = ReAnimeNativeFixture.html
         case "/api/m3u8/fixture-token": body = ReAnimeNativeFixture.token
         case "/master.m3u8": body = ReAnimeNativeFixture.master
@@ -76,14 +76,17 @@ final class KairoTests: XCTestCase {
         XCTAssertEqual(ReAnimeAPI.watchURL(anime, episode: 1, audio: .dub)?.absoluteString,
                        "https://reanime.to/watch/sample-season-abc123?ep=1&lang=dub")
         let servers = try await source.servers(resolved, episode: 1)
-        XCTAssertEqual(servers.map(\.name), ["HD-1", "HD-2"])
-        XCTAssertEqual(servers.last?.audio, .dub)
+        XCTAssertEqual(servers.map(\.name), ["HD-1", "HD-2", "H-SUB"])
+        XCTAssertEqual(servers[1].audio, .dub)
         let dubOptions = try await source.streams(resolved, episode: 1, audio: .dub)
         XCTAssertEqual(dubOptions.map(\.provider), ["hd2-dub"])
         XCTAssertTrue(try XCTUnwrap(dubOptions.first).isHLS)
         XCTAssertFalse(try XCTUnwrap(dubOptions.first).isEmbedded)
         XCTAssertNotNil(dubOptions.first?.reanimeMedia)
         XCTAssertEqual(dubOptions.first?.url.host, "fixture.flixcloud.cc")
+        let subOptions = try await source.streams(resolved, episode: 1, audio: .sub)
+        XCTAssertEqual(subOptions.first?.provider, "hsub-sub")
+        XCTAssertNotNil(subOptions.first?.reanimeMedia)
         let link = try XCTUnwrap(ReAnimeAPI.episodeLink(URL(string: "https://reanime.to/watch/sample-season-abc123?ep=1&lang=dub")!))
         XCTAssertEqual(link.1, 1)
         XCTAssertEqual(link.2, .dub)

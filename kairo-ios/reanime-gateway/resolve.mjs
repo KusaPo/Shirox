@@ -127,7 +127,7 @@ async function transform(wasm, first, second, third, seed) {
 
 export async function resolveEmbed(embed, get = fetch) {
   const url = new URL(embed);
-  if (url.protocol !== 'https:' || url.hostname !== 'flixcloud.cc' || !/^\/e\/[a-zA-Z0-9_-]+$/.test(url.pathname) || !['1', '2'].includes(url.searchParams.get('v')))
+  if (url.protocol !== 'https:' || url.hostname !== 'flixcloud.cc' || !/^\/e\/[a-zA-Z0-9_-]+$/.test(url.pathname) || !['1', '2', '3'].includes(url.searchParams.get('v')))
     throw new Error('Expected a FlixCloud episode link');
   const headers = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://reanime.to/' };
   const page = await get(url, { headers });

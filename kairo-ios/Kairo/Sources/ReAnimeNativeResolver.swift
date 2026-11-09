@@ -12,7 +12,7 @@ struct ReAnimeMedia: Equatable {
         guard url.scheme == "https", url.user == nil, url.password == nil,
               url.port == nil || url.port == 443, let host = url.host?.lowercased() else { return false }
         return host == "flixcloud.cc" || host.hasSuffix(".flixcloud.cc")
-            || host.hasSuffix(".rundowncdn.top")
+            || host.hasSuffix(".rundowncdn.top") || host.hasSuffix(".kineticcdn.top") || host.hasSuffix(".ignitecdn.top")
     }
     func playlist(_ data: Data) throws -> String {
         if let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), text.hasPrefix("#EXTM3U") { return text }
@@ -51,7 +51,7 @@ actor ReAnimeNativeResolver {
     }
     func resolve(_ embed: URL) async throws -> ReAnimeMedia {
         guard embed.scheme == "https", embed.host == "flixcloud.cc", embed.path.hasPrefix("/e/"),
-              ["1", "2"].contains(URLComponents(url: embed, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "v" })?.value ?? "") else {
+              ["1", "2", "3"].contains(URLComponents(url: embed, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "v" })?.value ?? "") else {
             throw KairoError.message("Unsupported ReAnime player address.")
         }
         if let cached = cache[embed], Date().timeIntervalSince(cached.0) < 240 { return cached.1 }
