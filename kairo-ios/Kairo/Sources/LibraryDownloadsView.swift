@@ -43,7 +43,7 @@ struct DownloadsView: View {
         List {
             Section {
                 Label(availableStorage, systemImage: "internaldrive")
-                Text("Keep Kairo open for HLS downloads. Completed segments are kept when paused; server limits retry automatically.").font(.caption).foregroundStyle(.secondary)
+                Text("Once preparation finishes, downloads can continue when you switch apps or lock your iPhone. iOS controls timing; completed segments are saved.").font(.caption).foregroundStyle(.secondary)
             }
             if store.state.downloads.isEmpty { ContentUnavailableView("Take a story with you", systemImage: "arrow.down.circle", description: Text("Open a title and tap the download button beside an episode.")) }
             ForEach(titles) { anime in
@@ -73,8 +73,16 @@ struct DownloadsView: View {
                     Button { downloads.resume(item.id) } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }.accessibilityLabel("Resume or retry download")
                 }
             }
-            if item.state == .downloading { ProgressView(value: item.fraction) }
-            Text(item.state == .ready ? "Available offline" : item.state.label).font(.caption).foregroundStyle(Theme.purple)
+            if item.state == .downloading || (item.downloadFraction > 0 && item.state != .ready) {
+                ProgressView(value: item.downloadFraction)
+                    .accessibilityLabel("Download progress").accessibilityValue(item.percentage)
+            }
+            HStack {
+                Text(item.state == .ready ? "Available offline" : item.state.label)
+                Spacer()
+                Text(item.percentage).monospacedDigit().fontWeight(.semibold)
+                    .accessibilityLabel("\(item.percentage) downloaded")
+            }.font(.caption).foregroundStyle(Theme.purple)
             EpisodeWatchProgress(progress: store.progress(item.anime, episode: item.episode))
             if let message = item.message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }.swipeActions { Button("Remove", role: .destructive) { deletion = item } }
@@ -82,6 +90,7 @@ struct DownloadsView: View {
 }
 
 struct SourcesView: View {
+    @AppStorage("appDesign") private var design: AppDesign = .cinema
     @ObservedObject private var registry = ModuleRegistry.shared
     @EnvironmentObject private var store: AppStore
     @AppStorage("appearance") private var appearance: AppAppearance = .system
@@ -93,8 +102,6 @@ struct SourcesView: View {
     @AppStorage("playerSeekLong") private var longSeek = 85
     @State private var sourceLink = ""
     @State private var reanimeLink = ""
-    @AppStorage("reanimeGatewayURL") private var reanimeGatewayURL = ""
-    @AppStorage("reanimeGatewayKey") private var reanimeGatewayKey = ""
     @State private var reanimeDestination: ReAnimeDestination?
     @State private var reanimeLinkError: String?
     @State private var manifestMessage: String?
@@ -117,6 +124,24 @@ struct SourcesView: View {
                 Link("HLS parser · PolyForm Noncommercial 1.0.0", destination: URL(string: "https://polyformproject.org/licenses/noncommercial/1.0.0/")!)
             }
             Section {
+                ForEach(AppDesign.allCases) { option in
+                    Button { design = option } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                Text(option.subtitle).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: design == option ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(design == option ? Theme.purple : Color.secondary)
+                        }.padding(.vertical, 5)
+                    }.buttonStyle(.plain)
+                        .accessibilityAddTraits(design == option ? .isSelected : [])
+                }
+            } header: { Text("App design") } footer: {
+                Text("Changes apply immediately and are saved for your next launch.")
+            }
+            Section {
                 Picker("Appearance", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
                 }.pickerStyle(.segmented)
@@ -126,17 +151,11 @@ struct SourcesView: View {
             Section {
                 Toggle("Animex", isOn: Binding(get: { store.state.preferences.animexEnabled }, set: { store.state.preferences.animexEnabled = $0; store.save() }))
                 Text("Native adapter · Search, episode providers and media URLs. Live playback compatibility must be verified on your device.").font(.caption).foregroundStyle(.secondary)
-                Text("ReAnime is built in. Native playback and offline saving need a configured media gateway.")
+                Text("ReAnime resolves media on this device for native playback and offline saving.")
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Sources") }
             Section("ReAnime native media") {
-                TextField("https://your-gateway.example", text: $reanimeGatewayURL)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                SecureField("Gateway access key", text: $reanimeGatewayKey)
-                if !reanimeGatewayURL.isEmpty && ReAnimeAPI.gatewayURL(reanimeGatewayURL) == nil {
-                    Text("Enter an HTTPS gateway address without a query or fragment.").font(.caption).foregroundStyle(.red)
-                }
-                Text("The gateway resolves ReAnime servers and serves standard HLS to Kairo's player and downloader. See REANIME_NATIVE.md for setup. Your playback requests pass through that gateway.")
+                Text("Playback and downloads run directly on your iPhone. No Mac or external media gateway is needed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {

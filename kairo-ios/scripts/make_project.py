@@ -16,25 +16,28 @@ for file in app + tests:
     path = file.relative_to(root).as_posix()
     add(path, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{path}"; sourceTree = SOURCE_ROOT;')
     add('build:' + path, f'isa = PBXBuildFile; fileRef = {uid(path)};')
+notices = 'Kairo/Resources/JSON5-LICENSE.txt'
+add(notices, f'isa = PBXFileReference; lastKnownFileType = text; path = "{notices}"; sourceTree = SOURCE_ROOT;')
+add('build:' + notices, f'isa = PBXBuildFile; fileRef = {uid(notices)};')
 assets = 'Kairo/Resources/Assets.xcassets'
 add(assets, f'isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "{assets}"; sourceTree = SOURCE_ROOT;')
 add('build:' + assets, f'isa = PBXBuildFile; fileRef = {uid(assets)};')
 add('product', 'isa = PBXFileReference; explicitFileType = wrapper.application; path = Kairo.app; sourceTree = BUILT_PRODUCTS_DIR;')
 add('testproduct', 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = KairoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
-add('appgroup', f'isa = PBXGroup; name = App; children = {refs([p.relative_to(root).as_posix() for p in app] + [assets])}; sourceTree = "<group>";')
+add('appgroup', f'isa = PBXGroup; name = App; children = {refs([p.relative_to(root).as_posix() for p in app] + [assets, notices])}; sourceTree = "<group>";')
 add('testgroup', f'isa = PBXGroup; name = Tests; children = {refs([p.relative_to(root).as_posix() for p in tests])}; sourceTree = "<group>";')
 add('products', f'isa = PBXGroup; name = Products; children = {refs(["product", "testproduct"])}; sourceTree = "<group>";')
 add('rootgroup', f'isa = PBXGroup; children = {refs(["appgroup", "testgroup", "products"])}; sourceTree = "<group>";')
 for prefix, files in [('app', app), ('tests', tests)]:
     add(prefix + 'sources', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {refs(["build:"+p.relative_to(root).as_posix() for p in files])}; runOnlyForDeploymentPostprocessing = 0;')
     for phase, kind in [('frameworks', 'PBXFrameworksBuildPhase'), ('resources', 'PBXResourcesBuildPhase')]:
-        resource_files = refs(['build:' + assets]) if prefix == 'app' and phase == 'resources' else '()'
+        resource_files = refs(['build:' + assets, 'build:' + notices]) if prefix == 'app' and phase == 'resources' else '()'
         add(prefix + phase, f'isa = {kind}; buildActionMask = 2147483647; files = {resource_files}; runOnlyForDeploymentPostprocessing = 0;')
 for prefix in ['project', 'app', 'tests']:
     for mode in ['Debug', 'Release']:
         settings = 'IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; '
         if prefix == 'project':
-            settings += 'SWIFT_OPTIMIZATION_LEVEL = "-Onone"; ENABLE_TESTABILITY = YES; DEBUG_INFORMATION_FORMAT = dwarf; ' if mode == 'Debug' else 'SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; '
+            settings += 'SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; ONLY_ACTIVE_ARCH = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; ENABLE_TESTABILITY = YES; DEBUG_INFORMATION_FORMAT = dwarf; ' if mode == 'Debug' else 'SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; '
         else:
             settings += 'TARGETED_DEVICE_FAMILY = "1,2"; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; PRODUCT_NAME = "$(TARGET_NAME)"; '
             settings += 'LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks",); '

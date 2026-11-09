@@ -20,9 +20,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(store).environmentObject(downloads)
+            Group {
+                #if DEBUG
+                if !ProcessInfo.processInfo.arguments.contains("--design-preview") {
+                    RootView().preferredColorScheme(appearance.colorScheme)
+                } else {
+                    GlassDesignPrototype()
+                }
+                #else
+                RootView().preferredColorScheme(appearance.colorScheme)
+                #endif
+            }.environmentObject(store).environmentObject(downloads)
                 .tint(Theme.purple)
-                .preferredColorScheme(appearance.colorScheme)
                 .alert("Storage needs attention", isPresented: Binding(get: { store.storageError != nil }, set: { if !$0 { store.storageError = nil } })) {
                     Button("OK") { store.storageError = nil }
                 } message: { Text(store.storageError ?? "") }
@@ -53,23 +62,48 @@ enum Theme {
 
 enum KairoTab: Hashable { case home, discover, library, downloads, settings }
 
+private struct KairoTabActiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    var kairoTabActive: Bool {
+        get { self[KairoTabActiveKey.self] }
+        set { self[KairoTabActiveKey.self] = newValue }
+    }
+}
+
 struct RootView: View {
     @State private var selectedTab: KairoTab = .home
+    @State private var openedTabs: [KairoTab] = [.home]
+    @AppStorage("appDesign") private var design: AppDesign = .cinema
+    private var selection: Binding<KairoTab> {
+        Binding(get: { selectedTab }, set: { tab in
+            if !openedTabs.contains(tab) { openedTabs.append(tab) }
+            selectedTab = tab
+        })
+    }
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack { HomeView(selectedTab: $selectedTab) }
-                .tabItem { Label("Home", systemImage: "house.fill") }.tag(KairoTab.home)
-            NavigationStack { DiscoverView() }
-                .tabItem { Label("Discover", systemImage: "magnifyingglass") }.tag(KairoTab.discover)
-            NavigationStack { LibraryView() }
-                .tabItem { Label("Library", systemImage: "books.vertical.fill") }.tag(KairoTab.library)
-            NavigationStack { DownloadsView() }
-                .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }.tag(KairoTab.downloads)
-            NavigationStack { SourcesView() }
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }.tag(KairoTab.settings)
+        // Each visited destination keeps its own navigation state. There is no
+        // UITabBar underneath the custom dock for child toolbars to reveal.
+        ZStack {
+            ForEach(openedTabs, id: \.self) { tab in
+                destination(tab)
+                    .environment(\.kairoTabActive, selectedTab == tab)
+                    .opacity(selectedTab == tab ? 1 : 0)
+                    .allowsHitTesting(selectedTab == tab)
+                    .accessibilityHidden(selectedTab != tab)
+            }
         }
-        .toolbarBackground(.ultraThinMaterial, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            GlassNavigationDock(selection: selection, design: design)
+        }
+    }
+    @ViewBuilder private func destination(_ tab: KairoTab) -> some View {
+        switch tab {
+        case .home: NavigationStack { HomeView(selectedTab: selection) }
+        case .discover: NavigationStack { DiscoverView() }
+        case .library: NavigationStack { LibraryView() }
+        case .downloads: NavigationStack { DownloadsView() }
+        case .settings: NavigationStack { SourcesView() }
+        }
     }
 }
 

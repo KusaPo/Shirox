@@ -11,7 +11,7 @@ import urllib.request
 
 def request(url, payload=None, headers=None):
     data = json.dumps(payload).encode() if payload else None
-    merged = {'Accept': 'application/json', **(headers or {})}
+    merged = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0', **(headers or {})}
     if data: merged['Content-Type'] = 'application/json'
     with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=merged), timeout=20) as response:
         return response.read(2_000_000)
@@ -32,11 +32,14 @@ def main():
         print('AniList probe failed:', type(e).__name__)
         failures += 1
     try:
-        query = 'query($query:String,$limit:Int){catalogAnime(filter:{query:$query},limit:$limit){items{id anilistId titleEnglish}}}'
-        j = json.loads(request('https://graphql.animex.one/graphql', {'query': query, 'variables': {'query': 'Solo Leveling', 'limit': 2}}))
+        query = 'query($filter:AnimeCatalogFilterInput,$sort:[AnimeSortInput!],$limit:Int,$offset:Int){catalogAnime(filter:$filter,sort:$sort,limit:$limit,offset:$offset){hasNextPage items{id anilistId titleEnglish genres}}}'
+        headers = {'Origin': 'https://animex.one', 'Referer': 'https://animex.one/'}
+        payload = {'query': query, 'variables': {'filter': {'isAdult': False, 'genres': ['Fantasy']}, 'sort': [{'field': 'POPULARITY', 'direction': 'DESC'}], 'limit': 3, 'offset': 3}}
+        j = json.loads(request('https://graphql.animex.one/graphql', payload, headers=headers))
         rows = j['data']['catalogAnime']['items']
-        assert rows, 'No catalog results'
-        print(f'Animex: {len(rows)} search records received.')
+        assert rows and all('Fantasy' in row['genres'] for row in rows), 'No filtered catalog results'
+        assert isinstance(j['data']['catalogAnime']['hasNextPage'], bool)
+        print(f'Animex: {len(rows)} native catalog records, server genre filter and pagination received.')
         base = 'https://pp.animex.one/rest/api/'
         slug = str(rows[0]['id'])
         providers = json.loads(request(base + 'servers?' + urllib.parse.urlencode({'id': slug, 'epNum': 1})))['subProviders']

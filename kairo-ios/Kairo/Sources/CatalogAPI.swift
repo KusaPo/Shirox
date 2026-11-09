@@ -28,8 +28,8 @@ struct DiscoverPage {
 actor CatalogAPI {
     static let shared = CatalogAPI()
     private let session: URLSession
-    init() {
-        let config = URLSessionConfiguration.ephemeral
+    init(configuration: URLSessionConfiguration? = nil) {
+        let config = configuration ?? URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 20
         config.timeoutIntervalForResource = 35
         session = URLSession(configuration: config)
@@ -38,6 +38,11 @@ actor CatalogAPI {
     private func request(_ url: URL, body: [String: Any]? = nil) async throws -> [String: Any] {
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        if url.host == "graphql.animex.one" {
+            request.setValue("https://animex.one", forHTTPHeaderField: "Origin")
+            request.setValue("https://animex.one/", forHTTPHeaderField: "Referer")
+        }
         if let body {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -73,31 +78,22 @@ actor CatalogAPI {
             return DiscoverPage(anime: try await ReAnimeAPI.shared.home(order, genre: genre), hasMore: false,
                                 note: "Titles from ReAnime's home feed. Search to explore the rest of its catalog.")
         case .animex:
-            // Animex exposes search, but no verified page cursor or recommendation
-            // feed. Vary search terms to browse samples and keep full-title search.
-            let seeds = ["an", "no", "ka", "to", "mi", "sa", "ko", "shi", "ra", "ki", "ma", "re", "ha", "yu", "ta", "mo", "se", "na", "da", "fu", "ri", "chi", "su", "ai"]
-            let index = (max(1, page) - 1) * 2
-            guard index < seeds.count else { return DiscoverPage(anime: [], hasMore: false) }
-            do {
-                var found: [Anime] = []
-                for seed in seeds[index..<min(index + 2, seeds.count)] {
-                    found += try await search(seed)
-                }
-                let filtered = genre == "All" ? found : found.filter { $0.genres.contains(genre) }
-                let unique = Array(Dictionary(grouping: filtered, by: \.id).values.compactMap(\.first))
-                let sorted: [Anime]
-                switch order {
-                case .popular: sorted = unique.sorted { $0.title < $1.title }
-                case .trending: sorted = unique.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-                case .rated: sorted = unique.sorted { $0.title < $1.title }
-                }
-                return DiscoverPage(anime: sorted, hasMore: index + 2 < seeds.count,
-                                    note: "Animex provides title search, not a complete paginated browse feed. These are catalog samples; search to find a specific show.")
-            } catch {
-                var fallback = try await discover(.anilist, page: page, order: order, genre: genre)
-                fallback.note = "Animex catalog browse is unavailable. Showing AniList titles; Kairo checks Animex for episodes when you open one."
-                return fallback
+            let query = """
+            query BrowseAnimex($filter:AnimeCatalogFilterInput,$sort:[AnimeSortInput!],$limit:Int,$offset:Int) {
+              catalogAnime(filter:$filter,sort:$sort,limit:$limit,offset:$offset) {
+                hasNextPage items { id anilistId malId titleRomaji titleEnglish coverImage bannerImage episodeCount seasonYear genres }
+              }
             }
+            """
+            let field: String
+            switch order { case .popular: field = "POPULARITY"; case .trending: field = "TRENDING"; case .rated: field = "AVERAGE_SCORE" }
+            var filter: [String: Any] = ["isAdult": false]
+            if genre != "All" { filter["genres"] = [genre] }
+            let json = try await request(URL(string: "https://graphql.animex.one/graphql")!, body: ["query": query,
+                "variables": ["filter": filter, "sort": [["field": field, "direction": "DESC"]], "limit": 30, "offset": (max(1, page) - 1) * 30]])
+            guard let data = json["data"] as? [String: Any], let catalog = data["catalogAnime"] as? [String: Any],
+                  let items = catalog["items"] as? [[String: Any]] else { throw KairoError.message("Animex's catalog response changed. Try again later.") }
+            return DiscoverPage(anime: items.compactMap(Self.animexAnime), hasMore: catalog["hasNextPage"] as? Bool ?? false)
         case .anilist:
             let query = """
             query Browse($page:Int,$sort:[MediaSort],$genre:String) {
@@ -131,6 +127,8 @@ actor CatalogAPI {
     }
 
     func search(_ keyword: String) async throws -> [Anime] {
+        let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard keyword.count >= 3 else { throw KairoError.message("Enter at least 3 characters to search Animex.") }
         let query = """
         query FastSearch($query:String,$limit:Int) { catalogAnime(filter:{query:$query},limit:$limit) {
         items { id anilistId malId titleRomaji titleEnglish coverImage bannerImage episodeCount seasonYear genres } } }

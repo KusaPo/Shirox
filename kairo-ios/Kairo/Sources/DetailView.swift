@@ -72,7 +72,7 @@ struct AnimeDetailView: View {
                         Stepper("Episode \(customEpisode)", value: $customEpisode, in: 1...5000)
                         episodeRow(customEpisode)
                     }
-                } header: { Text("Episodes") } footer: { Text("Episode previews come from episode-specific artwork or a frame captured from that episode. Streams that block frame capture show an episode placeholder. Titles come from AniList and MyAnimeList when available.") }
+                } header: { Text("Episodes") } footer: { Text("Episode details and previews appear when available.") }
             }
         }
         .listStyle(.plain)
@@ -346,7 +346,8 @@ actor EpisodePreviewService {
             } else { stream = nil }
             guard let media = localURL ?? stream?.url else { return nil }
             let headers = stream?.headers ?? [:]
-            let asset = AVURLAsset(url: media, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
+            let playable = media.isFileURL ? try await OfflineHLSServer.shared.playbackURL(for: media) : media
+            let asset = AVURLAsset(url: playable, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
             let duration = try? await asset.load(.duration)
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true

@@ -33,6 +33,8 @@ struct StreamOption: Identifiable {
     var headers: [String: String]
     var audio: AudioChoice
     var label: String
+    var reanimeMedia: ReAnimeMedia? = nil
+    var burnedInSubtitles = false
     var preview: EpisodeImageResource? = nil
     var isHLS: Bool { url.pathExtension.lowercased() == "m3u8" }
     var isEmbedded: Bool { url.host == "flixcloud.cc" && url.path.hasPrefix("/e/") }
@@ -83,6 +85,11 @@ struct DownloadRecord: Codable, Identifiable {
     var relativePath: String?
     var message: String?
     var created = Date()
+    var downloadFraction: Double {
+        if state == .ready { return 1 }
+        return fraction.isFinite ? min(0.99, max(0, fraction)) : 0
+    }
+    var percentage: String { "\(Int((downloadFraction * 100).rounded(.down)))%" }
     var localURL: URL? {
         guard let relativePath else { return nil }
         return LocalDownloadStorage.url(forRelativePath: relativePath)
