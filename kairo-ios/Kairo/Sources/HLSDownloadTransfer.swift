@@ -140,7 +140,10 @@ actor HLSDownloadTransfer {
     private let client: DownloadHTTPClient
     private var keys: [URL: Data] = [:]
     private let reanimeMedia: ReAnimeMedia?
-    init(client: DownloadHTTPClient, reanimeMedia: ReAnimeMedia? = nil) { self.client = client; self.reanimeMedia = reanimeMedia }
+    private let subtitleService: SubtitleService
+    init(client: DownloadHTTPClient, reanimeMedia: ReAnimeMedia? = nil, subtitleService: SubtitleService = .shared) {
+        self.client = client; self.reanimeMedia = reanimeMedia; self.subtitleService = subtitleService
+    }
     func download(url: URL, headers: [String: String], folder: URL,
                   onProgress: @escaping @Sendable (Double) -> Void,
                   onWait: @escaping @Sendable (TimeInterval) -> Void) async throws -> URL {
@@ -223,7 +226,7 @@ actor HLSDownloadTransfer {
             }
             manifests["playlist.m3u8"] = HLSManifestParser.localMasterManifest(videoPlaylist: "video.m3u8", audio: localAudio, bandwidth: choice.bandwidth, codecs: choice.codecs)
         } else { manifests["playlist.m3u8"] = videoText }
-        if let media = reanimeMedia, let captions = await SubtitleService.shared.archive(media.subtitles) {
+        if let media = reanimeMedia, let captions = await subtitleService.archive(media.subtitles) {
             manifests[SubtitleService.archiveName] = captions
         }
         for index in resources.indices {

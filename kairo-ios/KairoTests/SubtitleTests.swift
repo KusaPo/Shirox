@@ -57,6 +57,27 @@ final class SubtitleTests: XCTestCase {
         let archive = try XCTUnwrap(archived)
         XCTAssertEqual(try JSONDecoder().decode([SubtitleDocument].self, from: Data(archive.utf8)).first?.cues.first?.text, "Hello, world\nSecond line")
     }
+    func testBackgroundPreflightIncludesCaptionArchiveWithoutFetchingVideoSegments() async throws {
+        let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [SubtitleProtocol.self]
+        let service = SubtitleService(configuration: configuration)
+        let source = URL(string: "https://fixture.flixcloud.cc/master.m3u8")!
+        let media = ReAnimeMedia(url: source, playlistKey: nil, subtitles: [track])
+        let client = DownloadHTTPClient(transport: { request in
+            guard request.url?.pathExtension == "m3u8" else { throw URLError(.unsupportedURL) }
+            let body = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nhttps://fixture.flixcloud.cc/segment.ts\n#EXT-X-ENDLIST\n"
+            return (Data(body.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let job = try await HLSDownloadTransfer(client: client, reanimeMedia: media, subtitleService: service)
+            .prepareBackground(id: UUID(), url: source, headers: [:], folder: folder, wifiOnly: true)
+        let saved = try XCTUnwrap(job.manifests[SubtitleService.archiveName])
+        let documents = try JSONDecoder().decode([SubtitleDocument].self, from: Data(saved.utf8))
+        XCTAssertEqual(documents.first?.cues.first?.text, "Hello, world\nSecond line")
+        XCTAssertEqual(job.resources.count, 1)
+        XCTAssertEqual(job.resources[0].url.lastPathComponent, "segment.ts")
+    }
+
     @MainActor func testProgressAndCaptionRefreshesDoNotReattachTheAudioPlayer() {
         let controller = CountingPlayerController(), player = AVPlayer()
         for _ in 0..<20 { NativePlayer.configure(controller, player: player, nativeControls: false, fill: false, subtitleText: "") }

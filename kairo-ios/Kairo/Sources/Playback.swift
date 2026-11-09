@@ -157,6 +157,7 @@ final class PlaybackController: ObservableObject {
         let group = try? await item.asset.loadMediaSelectionGroup(for: .legible)
         guard !Task.isCancelled, active?.id == request.id, player.currentItem === item else { return }
         subtitleGroup = group
+        nativeSubtitleOptions = [:]; externalSubtitleTracks = [:]
         if let group {
             for (index, option) in group.options.enumerated() { nativeSubtitleOptions["native-\(index)"] = option }
             item.select(nil, in: group)
@@ -173,7 +174,8 @@ final class PlaybackController: ObservableObject {
         }
         guard !Task.isCancelled, active?.id == request.id, player.currentItem === item else { return }
         var seen = Set<String>()
-        for track in tracks where seen.insert(track.id).inserted { externalSubtitleTracks[track.id] = track }
+        tracks = tracks.filter { seen.insert($0.id).inserted }
+        for track in tracks { externalSubtitleTracks[track.id] = track }
         subtitleChoices = nativeSubtitleOptions.keys.sorted().compactMap { id in nativeSubtitleOptions[id].map { SubtitleChoice(id: id, label: $0.displayName) } }
             + tracks.filter { externalSubtitleTracks[$0.id] != nil }.map { SubtitleChoice(id: $0.id, label: $0.label) }
         subtitlesLoading = false
@@ -194,7 +196,7 @@ final class PlaybackController: ObservableObject {
     }
     @MainActor func selectSubtitle(_ id: String?, persist: Bool = true) {
         subtitleLoadTask?.cancel(); subtitleLoadTask = nil
-        subtitleCues = []; subtitleText = ""; subtitleSelection = id; subtitleNotice = nil
+        subtitleCues = []; subtitleText = ""; subtitleSelection = id; subtitleNotice = nil; subtitlesLoading = false
         if let group = subtitleGroup { player.currentItem?.select(nil, in: group) }
         if persist {
             UserDefaults.standard.set(id != nil, forKey: "playerSubtitlesEnabled")
@@ -399,9 +401,11 @@ struct NativePlayer: UIViewControllerRepresentable {
     }
     static func configure(_ view: AVPlayerViewController, player: AVPlayer, nativeControls: Bool, fill: Bool, subtitleText: String) {
         (view as? CaptionPlayerViewController)?.setCaption(subtitleText)
-        view.player = player
-        view.showsPlaybackControls = nativeControls
-        view.videoGravity = fill ? .resizeAspectFill : .resizeAspect
+        // Time/progress/caption updates must not reconfigure the audio player.
+        if view.player !== player { view.player = player }
+        if view.showsPlaybackControls != nativeControls { view.showsPlaybackControls = nativeControls }
+        let gravity: AVLayerVideoGravity = fill ? .resizeAspectFill : .resizeAspect
+        if view.videoGravity != gravity { view.videoGravity = gravity }
     }
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
         Self.configure(uiViewController, player: player, nativeControls: nativeControls, fill: fill, subtitleText: subtitleText)
@@ -515,7 +519,7 @@ struct PlayerScreen: View {
                     Text("This video has burned-in captions. Choose HD-1 or HD-2 for toggleable subtitles.")
                 }
                 Button { controller.selectSubtitle(nil) } label: {
-                    if controller.subtitleSelection == nil { Label("Off", systemImage: "checkmark") } else { Text("Off") }
+                    if controller.subtitleSelection == nil { Label(controller.burnedInSubtitles ? "Off (separate captions)" : "Off", systemImage: "checkmark") } else { Text(controller.burnedInSubtitles ? "Off (separate captions)" : "Off") }
                 }
                 ForEach(controller.subtitleChoices) { choice in
                     Button { controller.selectSubtitle(choice.id) } label: {
@@ -531,6 +535,7 @@ struct PlayerScreen: View {
                 Image(systemName: controller.subtitleSelection == nil ? "captions.bubble" : "captions.bubble.fill")
                     .font(.subheadline.bold()).frame(width: 40, height: 40).background(.black.opacity(0.65), in: Circle())
             }.accessibilityLabel("Subtitles")
+                .accessibilityValue(controller.subtitleChoices.first { $0.id == controller.subtitleSelection }?.label ?? "Off")
             if nativeControls {
                 Button("Kairo controls") { nativeControls = false; scheduleHideControls() }
                     .font(.caption.weight(.semibold)).padding(10).background(.black.opacity(0.65), in: Capsule())
